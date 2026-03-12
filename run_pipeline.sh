@@ -9,10 +9,9 @@
 #   2. Install Python requirements
 #   3. Build the whitelist (all parsers -> merge -> filter -> tier -> output)
 #   4. Normalise output VCF with bcftools norm
-#   5. Liftover DoCM hg19 variants (if bcftools >= 1.17 and chain file present)
-#   6. Index output VCF with tabix
-#   7. Print summary statistics
-#   8. (Optional) Run Mutect2 post-filter rescue
+#   5. Index output VCF with tabix
+#   6. Print summary statistics
+#   7. (Optional) Run Mutect2 post-filter rescue
 #
 # Usage:
 #   bash run_pipeline.sh [data_dir] [options]
@@ -64,8 +63,6 @@ INTERMEDIATE_DIR="intermediate"
 PREFIX="pan_cancer_whitelist_GRCh38"
 
 REFERENCE_FASTA="data/reference/GRCh38.fa"
-CHAIN_HG19_HG38="data/reference/hg19ToHg38.over.chain.gz"
-HG19_FASTA="data/reference/hg19.fa"
 
 # =============================================================================
 # ARGUMENT PARSING
@@ -105,6 +102,16 @@ die()  { echo "ERROR: $*" >&2; exit 1; }
 warn() { echo "WARNING: $*" >&2; }
 
 # =============================================================================
+# LOGGING
+# =============================================================================
+
+LOG_DIR="logs"
+mkdir -p "$LOG_DIR"
+LOG_FILE="${LOG_DIR}/run_$(date '+%Y%m%d_%H%M%S').log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+log "Log file: $LOG_FILE"
+
+# =============================================================================
 # STEP 1: PRE-RUN AUDIT
 # =============================================================================
 
@@ -125,14 +132,8 @@ BCFTOOLS_VERSION=$(bcftools --version | head -1 | grep -oP '\d+\.\d+' | head -1)
 BCFTOOLS_MAJOR=$(echo "$BCFTOOLS_VERSION" | cut -d. -f1)
 BCFTOOLS_MINOR=$(echo "$BCFTOOLS_VERSION" | cut -d. -f2)
 
-HAVE_LIFTOVER=false
-if [[ "$BCFTOOLS_MAJOR" -gt 1 ]] || \
-   [[ "$BCFTOOLS_MAJOR" -eq 1 && "$BCFTOOLS_MINOR" -ge 17 ]]; then
-    HAVE_LIFTOVER=true
-fi
-
 log "  Python   : $("$PYTHON" --version)"
-log "  bcftools : $BCFTOOLS_VERSION  (liftover support: $HAVE_LIFTOVER)"
+log "  bcftools : $BCFTOOLS_VERSION"
 log "  tabix    : $(tabix --version 2>&1 | head -1)"
 
 # =============================================================================
@@ -183,56 +184,7 @@ tabix -p vcf "$WL_FINAL" || die "tabix indexing failed."
 log "  Indexed: ${WL_FINAL}.tbi"
 
 # =============================================================================
-# STEP 5: LIFTOVER DoCM (hg19 -> hg38)
-# =============================================================================
-
-DOCM_INTER="${INTERMEDIATE_DIR}/docm_hg19.tsv.gz"
-DOCM_VCF_HG19="${INTERMEDIATE_DIR}/docm_hg19.vcf"
-DOCM_VCF_HG38="${INTERMEDIATE_DIR}/docm_hg38.vcf"
-
-if [[ -f "$DOCM_INTER" ]]; then
-    if $HAVE_LIFTOVER && [[ -f "$CHAIN_HG19_HG38" && -f "$HG19_FASTA" ]]; then
-        log "Lifting over DoCM variants (hg19 -> hg38)..."
-
-        "$PYTHON" - <<'PYEOF'
-import pandas as pd
-
-df = pd.read_csv('intermediate/docm_hg19.tsv.gz', sep='\t', dtype=str)
-df = df[
-    df['ref'].notna() & df['ref'].ne('') &
-    df['alt'].notna() & df['alt'].ne('') &
-    df['pos'].notna()
-]
-with open('intermediate/docm_hg19.vcf', 'w') as fh:
-    fh.write('##fileformat=VCFv4.2\n')
-    fh.write('#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n')
-    for _, row in df.iterrows():
-        chrom = str(row['chrom']).replace('chr', '')
-        fh.write(f"{chrom}\t{row['pos']}\t.\t{row['ref']}\t{row['alt']}\t.\t.\t.\n")
-print(f"DoCM: wrote {len(df)} rows to intermediate/docm_hg19.vcf")
-PYEOF
-
-        bcftools liftover \
-            --src-fasta  "$HG19_FASTA" \
-            --fasta-ref  "$REFERENCE_FASTA" \
-            --chain      "$CHAIN_HG19_HG38" \
-            --output     "$DOCM_VCF_HG38" \
-            "$DOCM_VCF_HG19" 2>/dev/null \
-            && log "  DoCM liftover complete: $DOCM_VCF_HG38" \
-            || warn "DoCM liftover failed. DoCM variants excluded from hg38 whitelist."
-    else
-        [[ ! -f "$CHAIN_HG19_HG38" ]] && \
-            warn "DoCM liftover skipped: chain file not found at $CHAIN_HG19_HG38."
-        [[ ! -f "$HG19_FASTA" ]] && \
-            warn "DoCM liftover skipped: hg19 FASTA not found at $HG19_FASTA."
-        ! $HAVE_LIFTOVER && \
-            warn "DoCM liftover skipped: bcftools >= 1.17 required (found $BCFTOOLS_VERSION)."
-        warn "DoCM variants remain as hg19 coordinates. Exclude from analysis if liftover is not performed."
-    fi
-fi
-
-# =============================================================================
-# STEP 6: INDEX WITH tabix
+# STEP 5: INDEX WITH tabix
 # =============================================================================
 
 log "Indexing whitelist VCF..."
@@ -241,7 +193,7 @@ tabix -f -p vcf "$WL_FINAL" \
 log "  Index written: ${WL_FINAL}.tbi"
 
 # =============================================================================
-# STEP 7: SUMMARY STATISTICS
+# STEP 6: SUMMARY STATISTICS
 # =============================================================================
 
 log "Summary statistics:"
@@ -259,7 +211,7 @@ log "  TSV : ${OUTPUT_DIR}/${PREFIX}.tsv.gz"
 log "  VCF : ${WL_FINAL}"
 
 # =============================================================================
-# STEP 8: MUTECT2 POST-FILTER RESCUE (optional)
+# STEP 7: MUTECT2 POST-FILTER RESCUE (optional)
 # =============================================================================
 
 if $DO_RESCUE; then
