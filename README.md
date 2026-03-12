@@ -1,11 +1,11 @@
 <div align="center">
   <h1>O N C O S I E V E</h1>
   <p><em>Pan-cancer variant curation and rescue tool</em></p>
-  <img src="https://github.com/user-attachments/assets/56304b21-8193-4e84-869a-347aadf7ab76" width="300"/>
+  <img src="https://github.com/user-attachments/assets/56304b21-8193-4e84-869a-347aadf7ab76" width="450"/>
   <p><strong>Author:</strong> Dr Christopher Trethewey<br>
   <strong>Email:</strong> christopher.trethewey@nhs.net</p>
 </div>
----
+
 
 ## Overview
 
