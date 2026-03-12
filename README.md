@@ -10,7 +10,7 @@
 
 ONCOSIEVE builds a pan-cancer somatic variant whitelist from multiple curated
 databases and applies it to rescue clinically relevant low-VAF variants from
-Mutect2 post-filter calls. Designed for use in NHS diagnostic NGS pipelines.
+Mutect2 post-filter calls. Designed for use in future diagnostic NGS pipelines.
 
 ---
 
@@ -62,7 +62,7 @@ oncosieve/
 ```bash
 source ~/venv_ngs/bin/activate
 cd /path/to/oncosieve
-bash run_pipeline.sh
+bash run_pipeline.sh /path/to/data/
 ```
 
 ### 2. Annotate with diagnostic panels
