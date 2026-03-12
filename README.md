@@ -21,7 +21,7 @@ Mutect2 post-filter calls. Designed for use in NHS diagnostic NGS pipelines.
 | Source         | Type        | Notes                                      |
 |----------------|-------------|--------------------------------------------|
 | COSMIC v103    | File        | GRCh38 TSV + VCF                           |
-| AACR GENIE     | File        | MAF, 271,837 samples                       |
+| AACR GENIE v19 | File        | MAF, 271,837 samples                       |
 | ClinVar        | File        | GRCh38 VCF                                 |
 | OncoKB         | API         | Annotation endpoint; academic token        |
 | TP53 database  | File        | GRCh38 CSV                                 |
