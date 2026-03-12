@@ -61,7 +61,7 @@ oncosieve/
 
 ```bash
 source ~/venv_ngs/bin/activate
-cd /srv/data/Chris/Whitelist/pan_cancer_whitelist
+cd /path/to/oncosieve
 bash run_pipeline.sh
 ```
 
