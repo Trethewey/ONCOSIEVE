@@ -10,7 +10,7 @@
 
 ONCOSIEVE builds a pan-cancer somatic variant whitelist from multiple curated
 databases and applies it to rescue clinically relevant low-VAF variants from
-Mutect2 post-filter calls. Designed for use in future diagnostic NGS pipelines.
+Mutect2 post-filter calls. Designed for use in NHS diagnostic NGS pipelines.
 
 ---
 
@@ -96,6 +96,41 @@ python mutect2_rescue.py \
 | 3    | Count-based only (n≥25, ct≥2)                                        | 1.0%    |
 
 ---
+
+
+---
+
+## Transcript annotation and MANE Select
+
+HGVSc strings in the whitelist are carried through as-is from each source
+database. COSMIC, GENIE, TP53, and cBioPortal each use their own reference
+transcripts, which may differ between sources and may not correspond to the
+MANE Select transcript for a given gene.
+
+**Known limitation:** No transcript normalisation is applied during the main
+pipeline. Two entries for the same variant from different sources may carry
+different HGVSc strings if those sources used different transcripts.
+
+A post-processing script is provided to remap HGVSc annotations to MANE Select
+transcripts using the NCBI MANE Select table and the Ensembl VEP REST API:
+
+```bash
+python mane_remap.py \
+    --whitelist output/pan_cancer_whitelist_GRCh38.tsv.gz \
+    --output    output/pan_cancer_whitelist_GRCh38.mane.tsv.gz
+
+# Test on first 500 variants
+python mane_remap.py \
+    --whitelist output/pan_cancer_whitelist_GRCh38.tsv.gz \
+    --output    output/pan_cancer_whitelist_GRCh38.mane.tsv.gz \
+    --max-variants 500
+```
+
+The output adds two columns: `hgvsc_mane` (MANE Select HGVSc where available,
+original otherwise) and `mane_remapped` (True/False). Variants where remapping
+fails via the API retain their original HGVSc value.
+
+Requires: `pip install requests pandas`
 
 ## Configuration
 
