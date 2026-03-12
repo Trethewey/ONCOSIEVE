@@ -1,15 +1,10 @@
-# <div align="center">
+<div align="center">
   <h1>O N C O S I E V E</h1>
   <p><em>Pan-cancer variant curation and rescue tool</em></p>
+  <img src="https://github.com/user-attachments/assets/56304b21-8193-4e84-869a-347aadf7ab76" width="300"/>
+  <p><strong>Author:</strong> Dr Christopher Trethewey<br>
+  <strong>Email:</strong> christopher.trethewey@nhs.net</p>
 </div>
-
-## Pan-cancer variant curation and rescue tool
-
-![9c87c033-dd0d-42fb-a4d5-616da12bbed8](https://github.com/user-attachments/assets/56304b21-8193-4e84-869a-347aadf7ab76)
-
-**Author:** Dr Christopher Trethewey  
-**Email:** christopher.trethewey@nhs.net
-
 ---
 
 ## Overview
