@@ -43,13 +43,8 @@ data_sources:
 
   cancer_hotspots:
     enabled: true
-    api_base: "https://www.cancerhotspots.org/api"
-    use_api: true
-
-  docm:
-    enabled: true
-    use_api: true
-    tsv: "data/docm/docm_variants.tsv"
+    tsv: "data/hotspots/hotspots_grch38_mane.tsv"
+    max_qvalue: 0.05
 
 # ── Reference genome ─────────────────────────────────────────
 reference:
