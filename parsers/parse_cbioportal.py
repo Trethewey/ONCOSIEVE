@@ -90,8 +90,9 @@ def _get_studies(api_base: str, tcga_only: bool, delay: float) -> list[dict]:
 
 def _get_mutations_for_study(study_id: str, api_base: str,
                               delay: float) -> list[dict]:
-    """Fetch all mutations for a given study ID."""
-    url = f'{api_base}/studies/{study_id}/mutations'
+    """Fetch all mutations for a given study via molecular-profile POST endpoint."""
+    molecular_profile_id = f'{study_id}_mutations'
+    url = f'{api_base}/molecular-profiles/{molecular_profile_id}/mutations/fetch'
     mutations = []
     page = 0
     while True:
@@ -100,13 +101,35 @@ def _get_mutations_for_study(study_id: str, api_base: str,
             'pageSize':   BATCH_SIZE,
             'pageNumber': page,
         }
-        data = _get(url, params=params, delay=delay)
-        if not data:
+        try:
+            resp = requests.post(
+                url,
+                params=params,
+                json={'sampleListId': f'{study_id}_all'},
+                timeout=SESSION_TIMEOUT,
+            )
+            time.sleep(delay)
+            if resp.status_code == 200:
+                data = resp.json()
+                if not data:
+                    break
+                mutations.extend(data)
+                if len(data) < BATCH_SIZE:
+                    break
+                page += 1
+            elif resp.status_code == 404:
+                # Molecular profile does not exist for this study
+                break
+            elif resp.status_code == 429:
+                wait = int(resp.headers.get('Retry-After', 60))
+                log.warning('Rate limited; waiting %ds', wait)
+                time.sleep(wait)
+            else:
+                log.warning('HTTP %d for %s', resp.status_code, url)
+                break
+        except requests.RequestException as e:
+            log.warning('Request error for %s: %s', study_id, e)
             break
-        mutations.extend(data)
-        if len(data) < BATCH_SIZE:
-            break
-        page += 1
     return mutations
 
 
