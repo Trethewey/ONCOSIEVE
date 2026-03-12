@@ -37,10 +37,11 @@ log = setup_logger('OncoKB')
 _API_BASE       = 'https://www.oncokb.org/api/v1'
 _API_TOKEN      = None  # set via api_token argument — never hardcode here
 _BATCH_ENDPOINT = f'{_API_BASE}/annotate/mutations/byProteinChange'
-_BATCH_SIZE     = 50
+_BATCH_SIZE     = 500
 _RETRY_DELAY    = 2.0
-_REQUEST_DELAY  = 0.5
+_REQUEST_DELAY  = 0.1
 _MAX_RETRIES    = 3
+_GENES_ENDPOINT = f'{_API_BASE}/utils/cancerGeneList'
 
 _ONCOGENICITY_INCLUDE = {
     'Oncogenic',
@@ -83,6 +84,32 @@ def parse_oncokb(variants_file: str,
     return _query_api(merged_df, include_oncogenicity, api_token)
 
 
+_COL_ALIASES = {
+    # target canonical name : possible names in the file (checked in order)
+    _COL_GENE:   ['Hugo Symbol', 'hugoSymbol', 'Gene', 'gene'],
+    _COL_ALT:    ['Alteration', 'alteration', 'Variant', 'variant', 'Protein Change'],
+    _COL_EFFECT: ['Mutation Effect', 'mutationEffect', 'Mutation_Effect', 'mutation_effect'],
+    _COL_ONCO:   ['Oncogenicity', 'oncogenicity'],
+    _COL_CTYPE:  ['Cancer Type', 'cancerType', 'Cancer_Type', 'cancer_type'],
+}
+
+
+def _normalise_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Rename columns to canonical names using _COL_ALIASES."""
+    rename = {}
+    for canonical, aliases in _COL_ALIASES.items():
+        if canonical in df.columns:
+            continue  # already correct
+        for alias in aliases:
+            if alias in df.columns:
+                rename[alias] = canonical
+                break
+    if rename:
+        log.info('OncoKB: renaming columns: %s', rename)
+        df = df.rename(columns=rename)
+    return df
+
+
 def _parse_file(variants_file: str, include_oncogenicity: list) -> pd.DataFrame:
     try:
         df_raw = pd.read_csv(variants_file, sep='\t', dtype=str, low_memory=False)
@@ -90,10 +117,14 @@ def _parse_file(variants_file: str, include_oncogenicity: list) -> pd.DataFrame:
         log.error('Failed to read OncoKB file: %s', e)
         return empty_standard_df()
 
+    log.info('OncoKB file columns: %s', list(df_raw.columns))
+    df_raw = _normalise_columns(df_raw)
+
     required = [_COL_GENE, _COL_ALT, _COL_EFFECT, _COL_ONCO]
     missing = [c for c in required if c not in df_raw.columns]
     if missing:
-        log.error('OncoKB file missing columns: %s', missing)
+        log.error('OncoKB file missing columns: %s  (available: %s)',
+                  missing, list(df_raw.columns))
         return empty_standard_df()
 
     df_raw = df_raw.fillna('')
@@ -109,6 +140,26 @@ def _parse_file(variants_file: str, include_oncogenicity: list) -> pd.DataFrame:
     )
 
 
+def _get_oncokb_genes(api_token: str) -> set:
+    """Fetch OncoKB's curated cancer gene list and return a set of Hugo symbols."""
+    try:
+        resp = requests.get(
+            _GENES_ENDPOINT,
+            headers={'Authorization': f'Bearer {api_token}', 'Accept': 'application/json'},
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            genes = {g['hugoSymbol'] for g in resp.json() if 'hugoSymbol' in g}
+            log.info('OncoKB gene list: %d known cancer genes', len(genes))
+            return genes
+        else:
+            log.warning('OncoKB gene list fetch failed (HTTP %d) — skipping gene pre-filter', resp.status_code)
+            return set()
+    except requests.RequestException as e:
+        log.warning('OncoKB gene list fetch error: %s — skipping gene pre-filter', e)
+        return set()
+
+
 def _query_api(merged_df: pd.DataFrame, include_oncogenicity: list, api_token: str) -> pd.DataFrame:
     pairs = (
         merged_df[['gene', 'hgvsp']]
@@ -119,6 +170,17 @@ def _query_api(merged_df: pd.DataFrame, include_oncogenicity: list, api_token: s
 
     if pairs.empty:
         log.warning('OncoKB: no valid (gene, hgvsp) pairs to query')
+        return empty_standard_df()
+
+    # Pre-filter to OncoKB known cancer genes to avoid querying millions of irrelevant variants
+    oncokb_genes = _get_oncokb_genes(api_token)
+    if oncokb_genes:
+        before = len(pairs)
+        pairs = pairs[pairs['gene'].isin(oncokb_genes)]
+        log.info('OncoKB gene pre-filter: %d -> %d pairs', before, len(pairs))
+
+    if pairs.empty:
+        log.warning('OncoKB: no pairs remain after gene pre-filter')
         return empty_standard_df()
 
     all_results = []

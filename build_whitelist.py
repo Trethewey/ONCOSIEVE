@@ -35,7 +35,7 @@ log = setup_logger('build_whitelist')
 COUNT_SOURCES = {'COSMIC', 'cBioPortal', 'GENIE', 'TP53_somatic', 'TP53_germline'}
 
 # Sources that are annotation/curated (not count-based)
-CURATED_SOURCES = {'OncoKB', 'ClinVar', 'CancerHotspots', 'DoCM_hg19'}
+CURATED_SOURCES = {'OncoKB', 'ClinVar', 'CancerHotspots'}
 
 # VCF header template
 _VCF_HEADER = """\
@@ -156,7 +156,6 @@ def run_parsers(cfg: dict, skip: set, inter_dir: str = 'intermediate') -> dict[s
     from parsers.parse_genie       import parse_genie
     from parsers.parse_tp53        import parse_tp53
     from parsers.parse_hotspots    import parse_hotspots
-    from parsers.parse_docm        import parse_docm
 
     frames: dict[str, pd.DataFrame] = {}
     ds = cfg.get('data_sources', {})
@@ -181,13 +180,6 @@ def run_parsers(cfg: dict, skip: set, inter_dir: str = 'intermediate') -> dict[s
             n_threads  = n_threads,
         )
         _save('COSMIC', frames['COSMIC'])
-
-    if _should_run('oncokb'):
-        log.info('=== Running OncoKB parser ===')
-        frames['OncoKB'] = parse_oncokb(
-            variants_file         = ds['oncokb']['variants_file'],
-            include_oncogenicity  = ds['oncokb'].get('include_oncogenicity'),
-        )
 
     if _should_run('cbioportal'):
         log.info('=== Running cBioPortal parser ===')
@@ -230,18 +222,10 @@ def run_parsers(cfg: dict, skip: set, inter_dir: str = 'intermediate') -> dict[s
 
     if _should_run('cancer_hotspots'):
         tasks['CancerHotspots'] = lambda: parse_hotspots(
-            xls       = ds['cancer_hotspots'].get('xls'),
-            api_base  = ds['cancer_hotspots'].get('api_base', 'https://www.cancerhotspots.org/api'),
-            use_api   = ds['cancer_hotspots'].get('use_api', True),
+            tsv_path  = ds['cancer_hotspots'].get('tsv'),
             max_qvalue= ds['cancer_hotspots'].get('max_qvalue', 0.05),
         )
 
-
-    if _should_run('docm'):
-        tasks['DoCM'] = lambda: parse_docm(
-            tsv     = ds['docm'].get('tsv'),
-            use_api = ds['docm'].get('use_api', True),
-        )
 
     if tasks:
         log.info('Running %d parsers in parallel (threads=%d)...', len(tasks), n_threads)
@@ -256,6 +240,17 @@ def run_parsers(cfg: dict, skip: set, inter_dir: str = 'intermediate') -> dict[s
                 except Exception as exc:
                     log.error('%s parser failed: %s', name, exc)
 
+    if _should_run('oncokb'):
+        log.info('=== Running OncoKB parser ===')
+        all_so_far = [df for df in frames.values() if not df.empty]
+        merged_so_far = pd.concat(all_so_far, ignore_index=True) if all_so_far else pd.DataFrame()
+        frames['OncoKB'] = parse_oncokb(
+            variants_file        = ds['oncokb']['variants_file'],
+            merged_df            = merged_so_far,
+            include_oncogenicity = ds['oncokb'].get('include_oncogenicity'),
+            api_token            = ds['oncokb'].get('api_token'),
+        )
+        _save('OncoKB', frames['OncoKB'])
     return frames
 
 
@@ -488,8 +483,7 @@ def apply_filters(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
       2. OncoKB oncogenicity = Oncogenic | Likely Oncogenic | Predicted Oncogenic
          (expert-curated override)
       3. ClinVar is a source (pathogenic somatic evidence)
-      4. DoCM is a source (expert-curated driver mutation)
-      5. CancerHotspots is a source (statistically significant hotspot)
+      4. CancerHotspots is a source (statistically significant hotspot)
     """
     thr = cfg.get('thresholds', {})
     min_samples      = thr.get('min_samples_total', 10)
@@ -500,17 +494,15 @@ def apply_filters(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     passes_oncokb  = df['oncokb_oncogenicity'].isin(
                          ['Oncogenic', 'Likely Oncogenic', 'Predicted Oncogenic'])
     passes_clinvar = df['sources'].str.contains('ClinVar', na=False)
-    passes_docm    = df['sources'].str.contains('DoCM', na=False)
     passes_hotspot = df['sources'].str.contains('CancerHotspots', na=False)
 
-    mask = passes_count | passes_oncokb | passes_clinvar | passes_docm | passes_hotspot
+    mask = passes_count | passes_oncokb | passes_clinvar | passes_hotspot
 
     df_pass = df[mask].copy()
     log.info('After filters: %d / %d variants retained', len(df_pass), len(df))
     log.info('  Count-based:   %d', passes_count.sum())
     log.info('  OncoKB:        %d', passes_oncokb.sum())
     log.info('  ClinVar:       %d', passes_clinvar.sum())
-    log.info('  DoCM:          %d', passes_docm.sum())
     log.info('  CancerHotspot: %d', passes_hotspot.sum())
     return df_pass
 
@@ -521,7 +513,7 @@ def assign_tiers(df: pd.DataFrame, cfg: dict | None = None) -> pd.DataFrame:
 
     Tier 1: OncoKB Oncogenic/Likely Oncogenic
             OR (n_samples >= tier1_min_samples AND n_cancer_types >= tier1_min_cancer_types)
-    Tier 2: OncoKB Predicted Oncogenic OR ClinVar/DoCM/CancerHotspots
+    Tier 2: OncoKB Predicted Oncogenic OR ClinVar/CancerHotspots
             OR (n_samples >= tier2_min_samples AND n_cancer_types >= tier2_min_cancer_types)
     Tier 3: passes base thresholds (minimum confidence)
 
@@ -545,7 +537,7 @@ def assign_tiers(df: pd.DataFrame, cfg: dict | None = None) -> pd.DataFrame:
     )
     is_tier2 = (
         (onco == 'Predicted Oncogenic')
-        | srcs.str.contains('ClinVar|DoCM|CancerHotspots', na=False)
+        | srcs.str.contains('ClinVar|CancerHotspots', na=False)
         | (n_s >= t2_s) & (n_ct >= t2_ct)
     )
 
@@ -738,10 +730,6 @@ def log_database_versions(cfg: dict, settings_file: str = 'settings.yaml') -> No
     if ds.get('cancer_hotspots', {}).get('enabled'):
         _add('CancerHotspots', 'live API v2', 'https://www.cancerhotspots.org/api')
 
-    # DoCM — live API
-    if ds.get('docm', {}).get('enabled'):
-        _add('DoCM', 'live API', 'http://docm.info/api/v1')
-
     log.info('=' * 60)
 
     # Write to file
@@ -770,6 +758,8 @@ def main():
                              '(e.g. cosmic,genie)')
     parser.add_argument('--from-intermediates', action='store_true',
                         help='Skip parsers and load from saved intermediate files')
+    parser.add_argument('--rerun-oncokb', action='store_true',
+                        help='Load all intermediates then re-run OncoKB against merged variants')
     parser.add_argument('--intermediate-only', action='store_true',
                         help='Run parsers and save intermediates; do not merge')
     parser.add_argument('--data-dir', default='',
@@ -793,7 +783,33 @@ def main():
     os.makedirs(out_dir,   exist_ok=True)
 
     # Run all parsers (or load from intermediates)
-    if args.from_intermediates:
+    if args.rerun_oncokb:
+        log.info('--rerun-oncokb: loading all intermediates except OncoKB...')
+        frames = {}
+        for fname in os.listdir(inter_dir):
+            if fname.endswith('.tsv.gz') and 'oncokb' not in fname.lower():
+                name = fname.replace('.tsv.gz', '')
+                path = os.path.join(inter_dir, fname)
+                df = pd.read_csv(path, sep='\t', dtype=str, low_memory=False)
+                for col in ('n_samples', 'n_cancer_types', 'pos'):
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+                frames[name] = df
+                log.info('Loaded intermediate: %s  (%d rows)', path, len(df))
+        merged_so_far = pd.concat([df for df in frames.values() if not df.empty], ignore_index=True)
+        log.info('OncoKB re-run: querying against %d merged variants', len(merged_so_far))
+        from parsers.parse_oncokb import parse_oncokb
+        ds = cfg['data_sources']
+        frames['OncoKB'] = parse_oncokb(
+            variants_file        = ds['oncokb']['variants_file'],
+            merged_df            = merged_so_far,
+            include_oncogenicity = ds['oncokb'].get('include_oncogenicity'),
+            api_token            = ds['oncokb'].get('api_token'),
+        )
+        ipath = os.path.join(inter_dir, 'oncokb.tsv.gz')
+        frames['OncoKB'].to_csv(ipath, sep='\t', index=False)
+        log.info('Saved intermediate: %s  (%d rows)', ipath, len(frames['OncoKB']))
+    elif args.from_intermediates:
         log.info('Loading from intermediate files in: %s', inter_dir)
         frames = {}
         for fname in os.listdir(inter_dir):
