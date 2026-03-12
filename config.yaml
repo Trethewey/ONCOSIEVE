@@ -1,0 +1,65 @@
+# ============================================================
+# Pan-Cancer Whitelist — Pipeline Configuration
+# ============================================================
+# This file defines DATA PATHS and SOURCE ENABLE/DISABLE flags.
+# Adjust thresholds, VAF floors, and other parameters in settings.yaml.
+# ============================================================
+
+settings_file: "settings.yaml"
+
+# ── Data source paths and enable flags ───────────────────────
+data_sources:
+
+  cosmic:
+    enabled: true
+    tsv: "data/cosmic/Cosmic_GenomeScreensMutant_v103_GRCh38.tsv.gz"
+    vcf: "data/cosmic/Cosmic_GenomeScreensMutant_v103_GRCh38.vcf.gz"
+    chunk_size: 200000
+
+  oncokb:
+    enabled: true
+    variants_file: "data/oncokb/allAnnotatedVariants.txt"   # used if present; otherwise API
+
+
+  cbioportal:
+    enabled: true
+    api_base: "https://www.cbioportal.org/api"
+
+  clinvar:
+    enabled: true
+    vcf: "data/clinvar/clinvar.vcf.gz"
+
+  genie:
+    enabled: true
+    version: "v19"
+    maf: "data/genie/data_mutations_extended.txt"
+    clinical_sample: "data/genie/data_clinical_sample.txt"
+
+  tp53:
+    enabled: true
+    somatic_tsv: "data/tp53/SomaticVariants_GRCh38.csv"
+    germline_tsv: "data/tp53/GermlineVariants_GRCh38.csv"
+    include_germline: false
+
+  cancer_hotspots:
+    enabled: true
+    api_base: "https://www.cancerhotspots.org/api"
+    use_api: true
+
+  docm:
+    enabled: true
+    use_api: true
+    tsv: "data/docm/docm_variants.tsv"
+
+# ── Reference genome ─────────────────────────────────────────
+reference:
+  fasta: "data/reference/GRCh38.fa"
+  liftover_chain: "data/reference/hg19ToHg38.over.chain.gz"
+
+# ── Output paths ─────────────────────────────────────────────
+output:
+  dir: "output"
+  prefix: "pan_cancer_whitelist_GRCh38"
+
+# ── Intermediate files ───────────────────────────────────────
+intermediate_dir: "intermediate"

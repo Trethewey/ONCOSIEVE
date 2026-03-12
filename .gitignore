@@ -1,0 +1,13 @@
+data/
+output/
+intermediate/
+*.tsv.gz
+*.vcf.gz
+*.vcf.gz.tbi
+*.vcf.gz.csi
+*.pyc
+__pycache__/
+*.log
+
+# User-specific settings containing API tokens — never commit
+settings.yaml

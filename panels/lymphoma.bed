@@ -1,0 +1,7 @@
+# Lymphoma panel — replace these intervals with your actual panel BED
+# chrom	start	end	gene
+2	61720450	61780000	BCL3
+3	187421800	187463100	BCL6
+8	127735434	127742951	MYC
+14	106052000	106179968	IGH
+18	60985000	61028999	BCL2

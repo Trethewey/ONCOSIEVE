@@ -1,0 +1,82 @@
+# ============================================================
+# Pan-Cancer Whitelist — User Settings
+# ============================================================
+# Edit this file to adjust pipeline behaviour.
+# Do NOT edit build_whitelist.py or mutect2_rescue.py directly.
+# ============================================================
+
+# ── Sample count thresholds ──────────────────────────────────
+# Applies to count-based sources only (COSMIC, GENIE, cBioPortal, TP53).
+# Expert-curated sources (OncoKB, ClinVar, CancerHotspots, DoCM)
+# bypass these thresholds entirely.
+thresholds:
+  min_samples_total: 25     # minimum samples across count-based sources
+  min_cancer_types:  2      # minimum distinct cancer types
+
+# ── Tiering thresholds ────────────────────────────────────────
+# Count-based criteria for Tier 1 and Tier 2 promotion.
+# Tier 3 = passes min_samples_total and min_cancer_types above.
+tiering:
+  tier1_min_samples:      50    # count-based Tier 1 floor
+  tier1_min_cancer_types: 3     # count-based Tier 1 cancer type floor
+  tier2_min_samples:      25    # count-based Tier 2 floor
+  tier2_min_cancer_types: 2     # count-based Tier 2 cancer type floor
+
+# ── VAF rescue floors (Mutect2 rescue) ───────────────────────
+# Tier-aware VAF floors applied during Mutect2 post-filter rescue.
+# Tier 1/2 = expert-curated or high-confidence. Tier 3 = count-based only.
+vaf_rescue:
+  tier1: 0.005    # 0.5% — strong evidence (OncoKB Oncogenic, ClinVar P/LP)
+  tier2: 0.005    # 0.5% — good evidence (CancerHotspots, DoCM)
+  tier3: 0.01     # 1.0% — count-based only; more conservative
+
+# ── Consequence types to include ─────────────────────────────
+# Remove a consequence type to exclude it from the whitelist.
+included_consequences:
+  - missense
+  - nonsense
+  - splice_site
+  - splice_region
+  - frameshift
+  - inframe_indel
+  - synonymous
+  - stop_lost
+  - start_lost
+  - unknown
+
+# ── OncoKB ───────────────────────────────────────────────────
+oncokb:
+  api_token: "YOUR_ONCOKB_TOKEN_HERE"
+  include_oncogenicity:
+    - "Oncogenic"
+    - "Likely Oncogenic"
+    - "Predicted Oncogenic"
+
+
+# ── ClinVar ──────────────────────────────────────────────────
+clinvar:
+  include_clinsig:
+    - "Pathogenic"
+    - "Likely_pathogenic"
+    - "Pathogenic/Likely_pathogenic"
+  somatic_only: true
+
+# ── Cancer Hotspots ───────────────────────────────────────────
+cancer_hotspots:
+  max_qvalue: 0.05
+
+# ── cBioPortal ───────────────────────────────────────────────
+cbioportal:
+  use_tcga_pancancer_only: false   # false = all public studies
+  max_studies: 0                   # 0 = no limit
+  request_delay_s: 0.5
+
+# ── Logging ──────────────────────────────────────────────────
+log_level: "INFO"    # DEBUG | INFO | WARNING | ERROR
+
+# =============================================================================
+# Performance settings
+# =============================================================================
+performance:
+  threads: 4        # Number of parallel parser threads. Set to number of CPU cores for maximum speed.
+  # e.g. for a 40-core machine, set threads: 40
