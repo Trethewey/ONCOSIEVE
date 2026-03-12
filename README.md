@@ -12,7 +12,7 @@
 
 ONCOSIEVE builds a pan-cancer somatic variant whitelist from multiple curated
 databases and applies it to rescue clinically relevant low-VAF variants from
-Mutect2 post-filter calls. Designed for use in NHS diagnostic NGS pipelines.
+Mutect2 post-filter calls. Designed for use in diagnostic NGS pipelines.
 
 ---
 
