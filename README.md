@@ -1,5 +1,5 @@
 # ONCOSIEVE
-## pan-cancer variant curation and rescue tool
+## Pan-cancer variant curation and rescue tool
 
 **Author:** Dr Christopher Trethewey  
 **Email:** christopher.trethewey@nhs.net
