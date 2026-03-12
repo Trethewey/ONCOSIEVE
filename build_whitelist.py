@@ -416,7 +416,7 @@ def _aggregate_polars(df_coord: pd.DataFrame) -> pd.DataFrame:
             first_nonempty('hgvsp'),
             first_nonempty('oncokb_oncogenicity'),
         ])
-        .collect(streaming=True)
+        .collect(engine="streaming")
     ).to_pandas()
 
     df_agg['n_cancer_types'] = df_agg['n_cancer_types'].fillna(1).astype(int)
