@@ -11,3 +11,4 @@ __pycache__/
 
 # User-specific settings containing API tokens — never commit
 settings.yaml
+logs/
