@@ -1,7 +1,7 @@
 <div align="center">
   <h1>O N C O S I E V E</h1>
   <p>Pan-cancer variant curation and rescue tool</p>
-  <p><em>7 databases · 33.5 million variants · 1 curated whitelist</em></p>
+  <p><em>7 databases · 33.5 million variants · 30,547 curated whitelist entries</em></p>
   <img src="https://github.com/user-attachments/assets/56304b21-8193-4e84-869a-347aadf7ab76" width="450"/>
   <p><strong>Author:</strong> Dr Christopher Trethewey<br>
   <strong>Email:</strong> christopher.trethewey@nhs.net</p>
@@ -104,44 +104,46 @@ python mutect2_rescue.py \
 
 ## Tiering
 
-| Tier | Criteria                                                          | Min VAF |
-|------|-------------------------------------------------------------------|---------|
-| 1    | OncoKB Oncogenic/Likely Oncogenic, or n≥50, ct≥3                 | 0.5%    |
-| 2    | OncoKB Predicted Oncogenic, ClinVar, Hotspots                    | 0.5%    |
-| 3    | Count-based only (n≥25, ct≥2)                                    | 1.0%    |
+Each variant in the whitelist is assigned a confidence tier based on the
+evidence supporting it. Tiering determines the minimum VAF required to rescue
+a Mutect2-filtered variant: higher confidence variants can be rescued at lower
+VAFs.
+
+A variant is assigned the highest tier for which it qualifies.
+
+| Tier | Criteria | Min VAF for rescue |
+|------|----------|--------------------|
+| 1 | OncoKB Oncogenic or Likely Oncogenic, OR seen in ≥50 samples across ≥3 cancer types | 0.5% |
+| 2 | OncoKB Predicted Oncogenic, OR present in ClinVar (pathogenic/somatic), OR a CancerHotspots recurrent mutation, OR seen in ≥25 samples across ≥2 cancer types | 0.5% |
+| 3 | Count-based only, below Tier 2 count threshold | 1.0% |
+
+**Why Tier 3 is currently empty:** The base filter for inclusion in the whitelist
+requires n≥25 samples and ct≥2 cancer types. The Tier 2 count threshold is set
+to the same values (n≥25, ct≥2). Any variant that passes the base filter
+therefore automatically meets the Tier 2 count threshold, leaving nothing to
+fall through to Tier 3. Tier 3 would populate if the base filter were relaxed
+below the Tier 2 threshold in `settings.yaml`.
+
+VAF floors per tier are configurable in `settings.yaml` under `vaf_rescue`.
 
 ---
 
-## Transcript annotation and MANE Select
+## Transcript annotation
 
-HGVSc strings in the whitelist are carried through as-is from each source
-database. COSMIC, GENIE, TP53, and cBioPortal each use their own reference
-transcripts, which may differ between sources and may not correspond to the
-MANE Select transcript for a given gene.
+HGVSc strings in the whitelist are carried through from each source database
+via VEP annotation. All coordinate-resolved variants are annotated against
+MANE Select transcripts during the VEP remapping steps in data preparation
+(see `tools/hotspots_vep_remap.py`). HGVSc values use ENST accessions
+throughout.
 
-**Known limitation:** No transcript normalisation is applied during the main
-pipeline. Two entries for the same variant from different sources may carry
-different HGVSc strings if those sources used different transcripts.
+The `transcript_id` column in the annotated TSV contains the ENST accession
+extracted from `hgvsc`. The `protein_change` column contains the normalised
+3-letter HGVS protein change derived from `hgvsp`.
 
-A post-processing script is provided to remap HGVSc annotations to MANE Select
-transcripts using the NCBI MANE Select table and the Ensembl VEP REST API:
-```bash
-python tools/mane_remap.py \
-    --whitelist output/pan_cancer_whitelist_GRCh38.tsv.gz \
-    --output    output/pan_cancer_whitelist_GRCh38.mane.tsv.gz
-
-# Test on first 500 variants
-python tools/mane_remap.py \
-    --whitelist output/pan_cancer_whitelist_GRCh38.tsv.gz \
-    --output    output/pan_cancer_whitelist_GRCh38.mane.tsv.gz \
-    --max-variants 500
-```
-
-The output adds two columns: `hgvsc_mane` (MANE Select HGVSc where available,
-original otherwise) and `mane_remapped` (True/False). Variants where remapping
-fails via the API retain their original HGVSc value.
-
-Requires: `pip install requests pandas`
+**Note on `tools/mane_remap.py`:** This tool is not currently compatible with
+the pipeline output. It expects RefSeq NM_ accessions but the pipeline produces
+ENST-prefixed HGVSc values from VEP. It is retained for potential future use
+but should not be run as a post-processing step.
 
 ---
 
