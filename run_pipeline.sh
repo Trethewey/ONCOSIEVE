@@ -180,17 +180,22 @@ WL_RAW="${OUTPUT_DIR}/${PREFIX}.vcf.gz"
 
 WL_FINAL="$WL_RAW"
 log "Indexing whitelist VCF..."
-tabix -p vcf "$WL_FINAL" || die "tabix indexing failed."
+tabix -f -p vcf "$WL_FINAL" || die "tabix indexing failed."
 log "  Indexed: ${WL_FINAL}.tbi"
 
 # =============================================================================
-# STEP 5: INDEX WITH tabix
+# STEP 5: POST-PROCESS WHITELIST (add genome_version, transcript_id, protein_change)
 # =============================================================================
 
-log "Indexing whitelist VCF..."
-tabix -f -p vcf "$WL_FINAL" \
-    || die "tabix indexing failed for $WL_FINAL."
-log "  Index written: ${WL_FINAL}.tbi"
+WL_TSV="${OUTPUT_DIR}/${PREFIX}.tsv.gz"
+WL_TSV_ANNOTATED="${OUTPUT_DIR}/${PREFIX}_annotated.tsv.gz"
+
+log "Running post-processing..."
+"$PYTHON" post_process_whitelist.py \
+    --whitelist "$WL_TSV" \
+    --out       "$WL_TSV_ANNOTATED" \
+    || die "post_process_whitelist.py failed."
+log "  Annotated TSV: $WL_TSV_ANNOTATED"
 
 # =============================================================================
 # STEP 6: SUMMARY STATISTICS
@@ -207,8 +212,9 @@ log "  Tier 1 (highest conf)    : $N_TIER1"
 log "  Tier 2                   : $N_TIER2"
 log "  Tier 3 (min threshold)   : $N_TIER3"
 log ""
-log "  TSV : ${OUTPUT_DIR}/${PREFIX}.tsv.gz"
-log "  VCF : ${WL_FINAL}"
+log "  TSV (annotated) : $WL_TSV_ANNOTATED"
+log "  TSV (base)      : $WL_TSV"
+log "  VCF             : ${WL_FINAL}"
 
 # =============================================================================
 # STEP 7: MUTECT2 POST-FILTER RESCUE (optional)
