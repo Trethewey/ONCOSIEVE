@@ -45,6 +45,14 @@ _MAX_RETRIES  = 5
 _BACKOFF_BASE = 2
 _BATCH_SIZE   = 50
 
+_RC = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C'}
+
+
+def _rc_seq(s: str) -> str:
+    """Reverse complement a nucleotide sequence."""
+    return ''.join(_RC.get(c.upper(), c) for c in reversed(s))
+
+
 _AA1TO3 = {
     'A': 'Ala', 'C': 'Cys', 'D': 'Asp', 'E': 'Glu', 'F': 'Phe',
     'G': 'Gly', 'H': 'His', 'I': 'Ile', 'K': 'Lys', 'L': 'Leu',
@@ -271,11 +279,23 @@ def _extract_mane_coords(vep_result: dict, mane_lookup: dict) -> dict | None:
     for t in transcripts:
         tx_id = str(t.get("transcript_id", "")).split(".")[0]
         if tx_id == mane_enst:
+            allele_str = str(vep_result.get("allele_string", "/"))
+            ref = allele_str.split("/")[0]
+            alt = allele_str.split("/")[-1]
+
+            # VEP returns allele_string on the transcript strand for
+            # minus-strand genes when queried via protein HGVS. Flip to
+            # genomic plus strand if the transcript is on the minus strand.
+            strand = t.get("strand", 1)
+            if strand == -1:
+                ref = _rc_seq(ref)
+                alt = _rc_seq(alt)
+
             return {
                 "chrom":       str(vep_result.get("seq_region_name", "")),
                 "pos":         str(vep_result.get("start", "")),
-                "ref":         str(vep_result.get("allele_string", "/").split("/")[0]),
-                "alt":         str(vep_result.get("allele_string", "/").split("/")[-1]),
+                "ref":         ref,
+                "alt":         alt,
                 "hgvsc":       t.get("hgvsc", ""),
                 "hgvsp":       t.get("hgvsp", ""),
                 "consequence": t.get("consequence_terms", ["unknown"])[0],

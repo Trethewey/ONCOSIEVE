@@ -171,8 +171,9 @@ def parse_clinvar(vcf_path: str,
                     'hgvsp':       '',
                     'consequence': consequence,
                     'cancer_type': cancer_type,
-                    'n_samples':   0,   # ClinVar provides no cohort sample counts
+                    'n_samples':   0,
                     'source':      'ClinVar',
+                    'clinvar_clinical_significance': clnsig_m.group(1).strip(),
                 })
 
     log.info(
@@ -184,5 +185,9 @@ def parse_clinvar(vcf_path: str,
         log.warning('ClinVar: no rows produced — check filters and input file')
         return empty_standard_df()
 
-    df = pd.DataFrame(rows, columns=STANDARD_COLS)
+    df = pd.DataFrame(rows)
+    for col in STANDARD_COLS:
+        if col not in df.columns:
+            df[col] = ''
+    df = df[STANDARD_COLS + ['clinvar_clinical_significance']]
     return df

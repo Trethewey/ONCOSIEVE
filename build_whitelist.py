@@ -147,6 +147,81 @@ def _finalise_config(cfg: dict, data_dir: str = '') -> dict:
     return cfg
 
 
+def _oncokb_prefilter(merged_so_far: pd.DataFrame, thr: dict, logger) -> pd.DataFrame:
+    """
+    Aggregate raw merged rows by (gene, hgvsp) using Polars and return only
+    pairs that pass count thresholds or come from curated sources.
+    Falls back to a simple deduplication if Polars is unavailable.
+    """
+    import logging
+    min_samples      = thr.get('min_samples_total', 10)
+    min_cancer_types = thr.get('min_cancer_types', 1)
+    count_pattern    = '|'.join(COUNT_SOURCES)
+
+    logger.info('OncoKB pre-filter: aggregating %d raw rows via Polars...', len(merged_so_far))
+
+    try:
+        import polars as pl
+
+        lf = pl.from_pandas(
+            merged_so_far[['gene', 'hgvsp', 'source', 'cancer_type', 'n_samples']]
+            .fillna('')
+            .assign(n_samples=lambda d: pd.to_numeric(d['n_samples'], errors='coerce').fillna(0))
+        ).lazy()
+
+        # Count-source aggregation
+        count_agg = (
+            lf.filter(pl.col('source').str.contains(count_pattern))
+            .group_by(['gene', 'hgvsp'])
+            .agg([
+                pl.col('n_samples').sum().alias('total_samples'),
+                pl.col('cancer_type')
+                  .filter(pl.col('cancer_type').str.to_lowercase() != 'unspecified')
+                  .n_unique()
+                  .alias('n_ct'),
+            ])
+            .filter(
+                (pl.col('total_samples') >= min_samples) &
+                (pl.col('n_ct') >= min_cancer_types)
+            )
+            .select(['gene', 'hgvsp'])
+            .collect()
+        )
+
+        # Curated source pairs
+        curated = (
+            lf.filter(pl.col('source').str.contains('ClinVar|CancerHotspots'))
+            .select(['gene', 'hgvsp'])
+            .unique()
+            .collect()
+        )
+
+        pair_pl = pl.concat([count_agg, curated]).unique()
+        pair_df = pair_pl.to_pandas()
+
+        logger.info('OncoKB pre-filter: %d count-passing + %d curated = %d unique pairs',
+                    len(count_agg), len(curated), len(pair_df))
+
+    except ImportError:
+        logger.warning('Polars not available — using simple deduplication for OncoKB pre-filter')
+        pair_df = (
+            merged_so_far[['gene', 'hgvsp']]
+            .dropna()
+            .drop_duplicates()
+            .query("gene != '' and hgvsp != ''")
+            .reset_index(drop=True)
+        )
+        logger.info('OncoKB pre-filter (fallback): %d unique pairs', len(pair_df))
+
+    pair_df = pair_df[
+        pair_df['gene'].str.strip().ne('') &
+        pair_df['hgvsp'].str.strip().ne('')
+    ].reset_index(drop=True)
+
+    logger.info('OncoKB pre-filter: %d pairs to query', len(pair_df))
+    return pair_df
+
+
 def run_parsers(cfg: dict, skip: set, inter_dir: str = 'intermediate') -> dict[str, pd.DataFrame]:
     """Run all enabled parsers and save each intermediate immediately on completion."""
     from parsers.parse_cosmic      import parse_cosmic
@@ -174,10 +249,11 @@ def run_parsers(cfg: dict, skip: set, inter_dir: str = 'intermediate') -> dict[s
     if _should_run('cosmic'):
         log.info('=== Running COSMIC parser ===')
         frames['COSMIC'] = parse_cosmic(
-            tsv_path   = ds['cosmic']['tsv'],
-            vcf_path   = ds['cosmic'].get('vcf'),
-            chunk_size = ds['cosmic'].get('chunk_size', 200_000),
-            n_threads  = n_threads,
+            tsv_path            = ds['cosmic']['tsv'],
+            vcf_path            = ds['cosmic'].get('vcf'),
+            classification_path = ds['cosmic'].get('classification'),
+            chunk_size          = ds['cosmic'].get('chunk_size', 200_000),
+            n_threads           = n_threads,
         )
         _save('COSMIC', frames['COSMIC'])
 
@@ -244,9 +320,11 @@ def run_parsers(cfg: dict, skip: set, inter_dir: str = 'intermediate') -> dict[s
         log.info('=== Running OncoKB parser ===')
         all_so_far = [df for df in frames.values() if not df.empty]
         merged_so_far = pd.concat(all_so_far, ignore_index=True) if all_so_far else pd.DataFrame()
+        thr = cfg.get('thresholds', {})
+        pair_df = _oncokb_prefilter(merged_so_far, thr, log)
         frames['OncoKB'] = parse_oncokb(
             variants_file        = ds['oncokb']['variants_file'],
-            merged_df            = merged_so_far,
+            merged_df            = pair_df,
             include_oncogenicity = ds['oncokb'].get('include_oncogenicity'),
             api_token            = ds['oncokb'].get('api_token'),
         )
@@ -313,6 +391,42 @@ def merge_and_aggregate(frames: dict[str, pd.DataFrame],
         df_agg = _aggregate_pandas(df_coord)
 
     log.info('Aggregated: %d unique variants', len(df_agg))
+
+    # OncoKB rows have no coordinates so they are excluded from the coordinate
+    # aggregation above. Join oncokb_oncogenicity back by (gene, hgvsp).
+    if not df_nocoord.empty and 'source' in df_nocoord.columns:
+        oncokb_rows = df_nocoord[
+            df_nocoord['source'].str.startswith('OncoKB:', na=False)
+        ][['gene', 'hgvsp', 'oncokb_oncogenicity']].copy()
+
+        if not oncokb_rows.empty:
+            oncokb_rows = oncokb_rows.dropna(subset=['gene', 'hgvsp'])
+            oncokb_rows = oncokb_rows[
+                oncokb_rows['gene'].str.strip().ne('') &
+                oncokb_rows['hgvsp'].str.strip().ne('')
+            ]
+            # Keep highest confidence classification per (gene, hgvsp)
+            onco_priority = {'Oncogenic': 0, 'Likely Oncogenic': 1, 'Predicted Oncogenic': 2}
+            oncokb_rows['_priority'] = oncokb_rows['oncokb_oncogenicity'].map(onco_priority).fillna(99)
+            oncokb_lookup = (
+                oncokb_rows.sort_values('_priority')
+                .drop_duplicates(subset=['gene', 'hgvsp'], keep='first')
+                .drop(columns=['_priority'])
+                .set_index(['gene', 'hgvsp'])['oncokb_oncogenicity']
+                .to_dict()
+            )
+            log.info('OncoKB lookup: %d (gene, hgvsp) entries', len(oncokb_lookup))
+
+            # Apply lookup to aggregated variants
+            def _lookup_oncokb(row):
+                if row.get('oncokb_oncogenicity', ''):
+                    return row['oncokb_oncogenicity']
+                return oncokb_lookup.get((row['gene'], row['hgvsp']), '')
+
+            df_agg['oncokb_oncogenicity'] = df_agg.apply(_lookup_oncokb, axis=1)
+            n_annotated = (df_agg['oncokb_oncogenicity'] != '').sum()
+            log.info('OncoKB: %d variants annotated after join', n_annotated)
+
     return df_agg
 
 
@@ -325,13 +439,16 @@ def _aggregate_polars(df_coord: pd.DataFrame) -> pd.DataFrame:
     """Multi-threaded aggregation using Polars."""
     import polars as pl
 
-    # Ensure oncokb_oncogenicity column exists
+    # Ensure annotation columns exist
     if 'oncokb_oncogenicity' not in df_coord.columns:
         df_coord['oncokb_oncogenicity'] = ''
+    if 'clinvar_clinical_significance' not in df_coord.columns:
+        df_coord['clinvar_clinical_significance'] = ''
 
     # Fill nulls for string columns before converting
     str_cols = ['chrom', 'ref', 'alt', 'source', 'cancer_type', 'gene',
-                'consequence', 'hgvsc', 'hgvsp', 'oncokb_oncogenicity']
+                'consequence', 'hgvsc', 'hgvsp', 'oncokb_oncogenicity',
+                'clinvar_clinical_significance']
     for c in str_cols:
         if c in df_coord.columns:
             df_coord[c] = df_coord[c].fillna('').astype(str)
@@ -415,6 +532,7 @@ def _aggregate_polars(df_coord: pd.DataFrame) -> pd.DataFrame:
             first_nonempty('hgvsc'),
             first_nonempty('hgvsp'),
             first_nonempty('oncokb_oncogenicity'),
+            first_nonempty('clinvar_clinical_significance'),
         ])
         .collect(engine="streaming")
     ).to_pandas()
@@ -454,18 +572,20 @@ def _aggregate_pandas(df_coord: pd.DataFrame) -> pd.DataFrame:
     consequence_agg    = df_coord.groupby(key_cols)['consequence'].agg(first_nonempty_agg)
     hgvsc_agg          = df_coord.groupby(key_cols)['hgvsc'].agg(first_nonempty_agg)
     hgvsp_agg          = df_coord.groupby(key_cols)['hgvsp'].agg(first_nonempty_agg)
-    oncokb_agg         = df_coord.groupby(key_cols)['oncokb_oncogenicity'].agg(first_nonempty_agg)
+    oncokb_agg      = df_coord.groupby(key_cols)['oncokb_oncogenicity'].agg(first_nonempty_agg)
+    clinvar_sig_agg = df_coord.groupby(key_cols)['clinvar_clinical_significance'].agg(first_nonempty_agg)
 
     df_agg = pd.DataFrame({
-        'sources':             sources_agg,
-        'cancer_types':        cancer_type_agg,
-        'n_cancer_types':      n_cancer_types_agg,
-        'n_samples':           n_samples_agg,
-        'gene':                gene_agg,
-        'consequence':         consequence_agg,
-        'hgvsc':               hgvsc_agg,
-        'hgvsp':               hgvsp_agg,
-        'oncokb_oncogenicity': oncokb_agg,
+        'sources':                       sources_agg,
+        'cancer_types':                  cancer_type_agg,
+        'n_cancer_types':                n_cancer_types_agg,
+        'n_samples':                     n_samples_agg,
+        'gene':                          gene_agg,
+        'consequence':                   consequence_agg,
+        'hgvsc':                         hgvsc_agg,
+        'hgvsp':                         hgvsp_agg,
+        'oncokb_oncogenicity':           oncokb_agg,
+        'clinvar_clinical_significance': clinvar_sig_agg,
     }).reset_index()
 
     df_agg['n_samples']   = df_agg['n_samples'].fillna(0).astype(int)
@@ -556,7 +676,7 @@ def write_tsv(df: pd.DataFrame, path: str) -> None:
     out_cols = [
         'chrom', 'pos', 'ref', 'alt', 'gene', 'hgvsc', 'hgvsp',
         'consequence', 'n_cancer_types', 'cancer_types', 'n_samples',
-        'sources', 'oncokb_oncogenicity', 'wl_tier',
+        'sources', 'oncokb_oncogenicity', 'clinvar_clinical_significance', 'wl_tier',
     ]
     df_out = df[out_cols].sort_values(['chrom', 'pos'])
     df_out.to_csv(path, sep='\t', index=False,
@@ -797,12 +917,14 @@ def main():
                 frames[name] = df
                 log.info('Loaded intermediate: %s  (%d rows)', path, len(df))
         merged_so_far = pd.concat([df for df in frames.values() if not df.empty], ignore_index=True)
-        log.info('OncoKB re-run: querying against %d merged variants', len(merged_so_far))
+        log.info('OncoKB re-run: %d raw rows loaded from intermediates', len(merged_so_far))
         from parsers.parse_oncokb import parse_oncokb
-        ds = cfg['data_sources']
+        ds      = cfg['data_sources']
+        thr     = cfg.get('thresholds', {})
+        pair_df = _oncokb_prefilter(merged_so_far, thr, log)
         frames['OncoKB'] = parse_oncokb(
             variants_file        = ds['oncokb']['variants_file'],
-            merged_df            = merged_so_far,
+            merged_df            = pair_df,
             include_oncogenicity = ds['oncokb'].get('include_oncogenicity'),
             api_token            = ds['oncokb'].get('api_token'),
         )
