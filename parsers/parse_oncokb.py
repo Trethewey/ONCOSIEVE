@@ -55,6 +55,53 @@ _COL_ONCO   = 'Oncogenicity'
 _COL_CTYPE  = 'Cancer Type'
 
 
+_AA3TO1 = {
+    'Ala': 'A', 'Cys': 'C', 'Asp': 'D', 'Glu': 'E', 'Phe': 'F',
+    'Gly': 'G', 'His': 'H', 'Ile': 'I', 'Lys': 'K', 'Leu': 'L',
+    'Met': 'M', 'Asn': 'N', 'Pro': 'P', 'Gln': 'Q', 'Arg': 'R',
+    'Ser': 'S', 'Thr': 'T', 'Val': 'V', 'Trp': 'W', 'Tyr': 'Y',
+    'Ter': '*', 'Sec': 'U',
+}
+
+
+def _hgvsp_to_oncokb(hgvsp: str) -> str | None:
+    """
+    Convert an hgvsp string to the single-letter format expected by OncoKB.
+
+    Handles:
+      ENSP00000484643.1:p.Trp235Arg  -> W235R
+      p.Trp235Arg                    -> W235R
+      p.Gly12Asp                     -> G12D
+      p.Ter510SerextTer49            -> *510S  (OncoKB uses * for stop)
+      W235R                          -> W235R  (already correct)
+    Returns None if the string cannot be parsed.
+    """
+    s = hgvsp.strip()
+
+    # Strip ENSP prefix
+    if ':' in s:
+        s = s.split(':', 1)[1].strip()
+
+    # Strip p. prefix
+    if s.startswith('p.'):
+        s = s[2:]
+
+    # Already single-letter format e.g. G12D, W235R
+    if re.match(r'^[A-Z*]\d+[A-Z*]$', s):
+        return s
+
+    # 3-letter format: convert ref and alt AA
+    m = re.match(r'^([A-Z][a-z]{2})(\d+)([A-Z][a-z]{2}|\*)(.*)$', s)
+    if m:
+        ref3, pos, alt3, suffix = m.groups()
+        ref1 = _AA3TO1.get(ref3)
+        alt1 = _AA3TO1.get(alt3, alt3) if alt3 != '*' else '*'
+        if ref1:
+            return f'{ref1}{pos}{alt1}'
+
+    return None
+
+
 def parse_oncokb(variants_file: str,
                  merged_df=None,
                  include_oncogenicity: list | None = None,
@@ -83,31 +130,6 @@ def parse_oncokb(variants_file: str,
     return _query_api(merged_df, include_oncogenicity, api_token)
 
 
-_COL_ALIASES = {
-    _COL_GENE:   ['Hugo Symbol', 'hugoSymbol', 'Gene', 'gene'],
-    _COL_ALT:    ['Alteration', 'alteration', 'Variant', 'variant', 'Protein Change'],
-    _COL_EFFECT: ['Mutation Effect', 'mutationEffect', 'Mutation_Effect', 'mutation_effect'],
-    _COL_ONCO:   ['Oncogenicity', 'oncogenicity', 'oncogenic'],
-    _COL_CTYPE:  ['Cancer Type', 'cancerType', 'Cancer_Type', 'cancer_type'],
-}
-
-
-def _normalise_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Rename columns to canonical names using _COL_ALIASES."""
-    rename = {}
-    for canonical, aliases in _COL_ALIASES.items():
-        if canonical in df.columns:
-            continue
-        for alias in aliases:
-            if alias in df.columns:
-                rename[alias] = canonical
-                break
-    if rename:
-        log.info('OncoKB: renaming columns: %s', rename)
-        df = df.rename(columns=rename)
-    return df
-
-
 def _parse_file(variants_file: str, include_oncogenicity: list) -> pd.DataFrame:
     try:
         df_raw = pd.read_csv(variants_file, sep='\t', dtype=str, low_memory=False)
@@ -115,12 +137,10 @@ def _parse_file(variants_file: str, include_oncogenicity: list) -> pd.DataFrame:
         log.error('Failed to read OncoKB file: %s', e)
         return empty_standard_df()
 
-    df_raw = _normalise_columns(df_raw)
-
     required = [_COL_GENE, _COL_ALT, _COL_EFFECT, _COL_ONCO]
     missing = [c for c in required if c not in df_raw.columns]
     if missing:
-        log.error('OncoKB file missing columns: %s  (available: %s)', missing, list(df_raw.columns))
+        log.error('OncoKB file missing columns: %s', missing)
         return empty_standard_df()
 
     df_raw = df_raw.fillna('')
@@ -155,16 +175,18 @@ def _query_api(merged_df: pd.DataFrame, include_oncogenicity: list, api_token: s
 
     for batch_idx in range(n_batches):
         batch = pairs.iloc[batch_idx * _BATCH_SIZE:(batch_idx + 1) * _BATCH_SIZE]
-        payload = [
-            {
-                'id': str(i),
-                'hugoSymbol': str(row['gene']).strip(),
-                'alteration': (str(row['hgvsp'])[2:]
-                               if str(row['hgvsp']).startswith('p.')
-                               else str(row['hgvsp'])),
-            }
-            for i, (_, row) in enumerate(batch.iterrows())
-        ]
+        payload = []
+        for i, (_, row) in enumerate(batch.iterrows()):
+            alteration = _hgvsp_to_oncokb(str(row['hgvsp']))
+            if not alteration:
+                continue
+            payload.append({
+                'id':          str(i),
+                'gene':        {'hugoSymbol': str(row['gene']).strip()},
+                'alteration':  alteration,
+            })
+        if not payload:
+            continue
 
         for attempt in range(_MAX_RETRIES):
             try:

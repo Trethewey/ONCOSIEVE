@@ -1,60 +1,37 @@
-# ============================================================
-# Pan-Cancer Whitelist — Pipeline Configuration
-# ============================================================
-# This file defines DATA PATHS and SOURCE ENABLE/DISABLE flags.
-# Adjust thresholds, VAF floors, and other parameters in settings.yaml.
-# ============================================================
-
-settings_file: "settings.yaml"
-
-# ── Data source paths and enable flags ───────────────────────
+settings_file: settings.yaml
 data_sources:
-
   cosmic:
     enabled: true
-    tsv: "data/cosmic/Cosmic_GenomeScreensMutant_v103_GRCh38.tsv.gz"
-    vcf: "data/cosmic/Cosmic_GenomeScreensMutant_v103_GRCh38.vcf.gz"
+    tsv: data/cosmic/Cosmic_GenomeScreensMutant_v103_GRCh38.tsv.gz
+    vcf: data/cosmic/Cosmic_GenomeScreensMutant_v103_GRCh38.vcf.gz
     chunk_size: 200000
-
   oncokb:
     enabled: true
-    variants_file: "data/oncokb/allAnnotatedVariants.txt"   # used if present; otherwise API
-
-
+    variants_file: data/oncokb/allAnnotatedVariants.txt
   cbioportal:
     enabled: true
-    api_base: "https://www.cbioportal.org/api"
-
+    api_base: https://www.cbioportal.org/api
   clinvar:
     enabled: true
-    vcf: "data/clinvar/clinvar.vcf.gz"
-
+    vcf: data/clinvar/clinvar.vcf.gz
   genie:
     enabled: true
-    version: "v19"
-    maf: "data/genie/data_mutations_extended.txt"
-    clinical_sample: "data/genie/data_clinical_sample.txt"
-
+    version: v19
+    maf: data/genie/data_mutations_extended_grch38_lifted.txt
+    clinical_sample: data/genie/data_clinical_sample.txt
   tp53:
     enabled: true
-    somatic_tsv: "data/tp53/SomaticVariants_GRCh38.csv"
-    germline_tsv: "data/tp53/GermlineVariants_GRCh38.csv"
+    somatic_tsv: data/tp53/SomaticVariants_GRCh38.csv
+    germline_tsv: data/tp53/GermlineVariants_GRCh38.csv
     include_germline: false
-
   cancer_hotspots:
     enabled: true
-    tsv: "data/hotspots/hotspots_grch38_mane.tsv"
+    tsv: data/hotspots/hotspots_grch38_mane.tsv
     max_qvalue: 0.05
-
-# ── Reference genome ─────────────────────────────────────────
 reference:
-  fasta: "data/reference/GRCh38.fa"
-  liftover_chain: "data/reference/hg19ToHg38.over.chain.gz"
-
-# ── Output paths ─────────────────────────────────────────────
+  fasta: data/reference/GRCh38.fa
+  liftover_chain: data/reference/hg19ToHg38.over.chain.gz
 output:
-  dir: "output"
-  prefix: "pan_cancer_whitelist_GRCh38"
-
-# ── Intermediate files ───────────────────────────────────────
-intermediate_dir: "intermediate"
+  dir: output
+  prefix: pan_cancer_whitelist_GRCh38
+intermediate_dir: intermediate

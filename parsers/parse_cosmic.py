@@ -103,6 +103,37 @@ def _extract_alleles_from_cds(cds: str, strand: str) -> Optional[tuple[str, str]
     return ref_cds, alt_cds
 
 
+def _build_classification_lookup(classification_path: str) -> dict[str, str]:
+    """
+    Parse COSMIC Classification TSV and return a dict:
+    COSMIC_PHENOTYPE_ID (e.g. COSO36004862) -> PRIMARY_SITE (e.g. 'lung')
+    """
+    if not classification_path or not os.path.exists(classification_path):
+        log.warning('COSMIC classification file not found: %s — cancer types will be phenotype IDs',
+                    classification_path)
+        return {}
+    log.info('Building COSMIC classification lookup from %s', classification_path)
+    lookup: dict[str, str] = {}
+    opener = gzip.open if classification_path.endswith('.gz') else open
+    with opener(classification_path, 'rt') as fh:
+        header = fh.readline().rstrip('\n').split('\t')
+        col = {c: i for i, c in enumerate(header)}
+        if 'COSMIC_PHENOTYPE_ID' not in col or 'PRIMARY_SITE' not in col:
+            log.error('Classification file missing required columns. Found: %s', header)
+            return {}
+        for line in fh:
+            parts = line.rstrip('\n').split('\t')
+            try:
+                pheno_id    = parts[col['COSMIC_PHENOTYPE_ID']].strip()
+                primary_site = parts[col['PRIMARY_SITE']].strip().lower()
+                if pheno_id and primary_site:
+                    lookup[pheno_id] = primary_site
+            except IndexError:
+                continue
+    log.info('COSMIC classification lookup: %d entries', len(lookup))
+    return lookup
+
+
 def _build_vcf_lookup(vcf_path: str) -> dict[str, tuple[str, str, str, str]]:
     """
     Parse COSMIC GRCh38 VCF and return a dict keyed by COSM/COSV ID.
@@ -132,6 +163,7 @@ def _build_vcf_lookup(vcf_path: str) -> dict[str, tuple[str, str, str, str]]:
 
 def parse_cosmic(tsv_path: str,
                  vcf_path: Optional[str] = None,
+                 classification_path: Optional[str] = None,
                  chunk_size: int = 200_000,
                  n_threads: int = 4) -> pd.DataFrame:
     """
@@ -160,6 +192,10 @@ def parse_cosmic(tsv_path: str,
     else:
         log.warning('COSMIC VCF not provided or not found; REF/ALT will be '
                     'inferred from CDS for SNVs only.')
+
+    classification_lookup: dict = {}
+    if classification_path:
+        classification_lookup = _build_classification_lookup(classification_path)
 
     usecols = [
         _COL_GENE, _COL_HGVSP, _COL_HGVSC, _COL_CDS, _COL_AA,
@@ -239,7 +275,7 @@ def parse_cosmic(tsv_path: str,
         log.info('COSMIC: processing %d byte-range sections with %d workers',
                  len(ranges), n_workers)
 
-        worker_args = [(plain_path, start, end, col_idx, vcf_lookup)
+        worker_args = [(plain_path, start, end, col_idx, vcf_lookup, classification_lookup)
                        for start, end in ranges]
 
         with mp.Pool(processes=n_workers) as pool:
@@ -294,7 +330,8 @@ def _process_cosmic_section(path: str,
                              byte_start: int,
                              byte_end: int,
                              col_idx: dict,
-                             vcf_lookup: dict) -> tuple[dict, dict]:
+                             vcf_lookup: dict,
+                             classification_lookup: dict) -> tuple[dict, dict]:
     """
     Read and process a byte-range section of a plain-text (decompressed) TSV.
     Each worker seeks independently — no shared file handle, no GIL contention.
@@ -316,16 +353,17 @@ def _process_cosmic_section(path: str,
             line = raw.decode('utf-8', errors='replace').rstrip('\n')
             chunk.append(line.split('\t'))
             if len(chunk) >= 50_000:
-                _process_cosmic_chunk(chunk, col_idx, vcf_lookup, agg, meta)
+                _process_cosmic_chunk(chunk, col_idx, vcf_lookup, classification_lookup, agg, meta)
                 chunk = []
     if chunk:
-        _process_cosmic_chunk(chunk, col_idx, vcf_lookup, agg, meta)
+        _process_cosmic_chunk(chunk, col_idx, vcf_lookup, classification_lookup, agg, meta)
     return agg, meta
 
 
 def _process_cosmic_chunk(chunk: list[list],
                            col_idx: dict[str, int],
                            vcf_lookup: dict,
+                           classification_lookup: dict,
                            agg: dict,
                            meta: dict) -> None:
     """Process one chunk of COSMIC TSV rows, populating agg and meta in place."""
@@ -353,7 +391,8 @@ def _process_cosmic_chunk(chunk: list[list],
                 continue
 
             gene        = parts[col_idx[_COL_GENE]].strip()
-            cancer_type = parts[col_idx[_COL_SITE]].strip().lower()
+            pheno_id    = parts[col_idx[_COL_SITE]].strip()
+            cancer_type = classification_lookup.get(pheno_id, pheno_id).lower()
             sample_id   = parts[col_idx[_COL_SAMPLE_ID]].strip()
             cds         = parts[col_idx[_COL_CDS]].strip()
             desc        = parts[col_idx[_COL_DESC]].strip()
