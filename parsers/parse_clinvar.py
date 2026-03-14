@@ -147,7 +147,7 @@ def parse_clinvar(vcf_path: str,
             gene    = gene_m.group(1).strip() if gene_m else ''
 
             clndn_m     = _CLNDN_RE.search(info)
-            cancer_type = clndn_m.group(1).replace('_', ' ').lower() \
+            cancer_type = clndn_m.group(1).split('|')[0].replace('_', ' ').lower().strip() \
                           if clndn_m else 'unspecified'
 
             mc_m        = _MC_RE.search(info)
