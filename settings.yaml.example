@@ -6,7 +6,7 @@
 # ============================================================
 
 # ── Sample count thresholds ──────────────────────────────────
-# Applies to count-based sources only (COSMIC, GENIE, cBioPortal, TP53).
+# Applies to count-based sources only (COSMIC, GENIE, TCGA, TP53).
 # Expert-curated sources (OncoKB, ClinVar, CancerHotspots, DoCM)
 # bypass these thresholds entirely.
 thresholds:
@@ -65,11 +65,12 @@ clinvar:
 cancer_hotspots:
   max_qvalue: 0.05
 
-# ── cBioPortal ───────────────────────────────────────────────
-cbioportal:
-  use_tcga_pancancer_only: false   # false = all public studies
-  max_studies: 0                   # 0 = no limit
-  request_delay_s: 0.5
+# ── cBioPortal (disabled by default; replaced by TCGA mc3) ──
+# Uncomment to re-enable the live cBioPortal API.
+# cbioportal:
+#   use_tcga_pancancer_only: false
+#   max_studies: 0
+#   request_delay_s: 0.5
 
 # ── Logging ──────────────────────────────────────────────────
 log_level: "INFO"    # DEBUG | INFO | WARNING | ERROR

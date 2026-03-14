@@ -32,7 +32,7 @@ from parsers.common import INCLUDED_CONSEQUENCES, STANDARD_COLS, setup_logger
 log = setup_logger('build_whitelist')
 
 # Sources that contribute to the sample count threshold
-COUNT_SOURCES = {'COSMIC', 'cBioPortal', 'GENIE', 'TP53_somatic', 'TP53_germline'}
+COUNT_SOURCES = {'COSMIC', 'TCGA', 'GENIE', 'TP53_somatic', 'TP53_germline'}
 
 # Sources that are annotation/curated (not count-based)
 CURATED_SOURCES = {'OncoKB', 'ClinVar', 'CancerHotspots'}
@@ -129,6 +129,7 @@ def load_config(path: str, data_dir: str = '') -> dict:
         cfg['vaf_rescue']            = settings.get('vaf_rescue', {})
         cfg['included_consequences'] = settings.get('included_consequences', [])
         cfg['log_level']             = settings.get('log_level', 'INFO')
+        cfg['performance']           = settings.get('performance', {})
         for src in ('oncokb', 'clinvar', 'cancer_hotspots', 'cbioportal'):
             if src in settings and src in cfg.get('data_sources', {}):
                 cfg['data_sources'][src].update(settings[src])
@@ -231,6 +232,7 @@ def run_parsers(cfg: dict, skip: set, inter_dir: str = 'intermediate') -> dict[s
     from parsers.parse_genie       import parse_genie
     from parsers.parse_tp53        import parse_tp53
     from parsers.parse_hotspots    import parse_hotspots
+    from parsers.parse_tcga        import parse_tcga
 
     frames: dict[str, pd.DataFrame] = {}
     ds = cfg.get('data_sources', {})
@@ -265,6 +267,14 @@ def run_parsers(cfg: dict, skip: set, inter_dir: str = 'intermediate') -> dict[s
             max_studies             = ds['cbioportal'].get('max_studies', 0),
             request_delay_s         = ds['cbioportal'].get('request_delay_s', 0.5),
         )
+        _save('cBioPortal', frames['cBioPortal'])
+
+    if _should_run('tcga'):
+        log.info('=== Running TCGA parser ===')
+        frames['TCGA'] = parse_tcga(
+            maf_path = ds['tcga']['maf'],
+        )
+        _save('TCGA', frames['TCGA'])
 
     if _should_run('clinvar'):
         log.info('=== Running ClinVar parser ===')
@@ -392,8 +402,16 @@ def merge_and_aggregate(frames: dict[str, pd.DataFrame],
 
     log.info('Aggregated: %d unique variants', len(df_agg))
 
-    # OncoKB rows have no coordinates so they are excluded from the coordinate
-    # aggregation above. Join oncokb_oncogenicity back by (gene, hgvsp).
+    # -------------------------------------------------------------------------
+    # OncoKB join — coordinate-based primary, (gene, hgvsp) fallback.
+    # COSMIC and TCGA use different reference transcripts, causing Polars
+    # first_nonempty to pick an incompatible hgvsp. Fix: resolve via trusted
+    # sources (GENIE, ClinVar, CancerHotspots) before aggregation scrambles
+    # the hgvsp values, then join by coordinate key post-aggregation.
+    # -------------------------------------------------------------------------
+
+    ONCOKB_TRUSTED_SOURCES = {'GENIE', 'ClinVar', 'CancerHotspots'}
+
     if not df_nocoord.empty and 'source' in df_nocoord.columns:
         oncokb_rows = df_nocoord[
             df_nocoord['source'].str.startswith('OncoKB:', na=False)
@@ -405,27 +423,91 @@ def merge_and_aggregate(frames: dict[str, pd.DataFrame],
                 oncokb_rows['gene'].str.strip().ne('') &
                 oncokb_rows['hgvsp'].str.strip().ne('')
             ]
-            # Keep highest confidence classification per (gene, hgvsp)
+
             onco_priority = {'Oncogenic': 0, 'Likely Oncogenic': 1, 'Predicted Oncogenic': 2}
             oncokb_rows['_priority'] = oncokb_rows['oncokb_oncogenicity'].map(onco_priority).fillna(99)
-            oncokb_lookup = (
+
+            oncokb_by_hgvsp = (
                 oncokb_rows.sort_values('_priority')
                 .drop_duplicates(subset=['gene', 'hgvsp'], keep='first')
-                .drop(columns=['_priority'])
                 .set_index(['gene', 'hgvsp'])['oncokb_oncogenicity']
                 .to_dict()
             )
-            log.info('OncoKB lookup: %d (gene, hgvsp) entries', len(oncokb_lookup))
+            log.info('OncoKB: %d (gene, hgvsp) entries in lookup', len(oncokb_by_hgvsp))
 
-            # Apply lookup to aggregated variants
+            trusted_coord = df_coord.loc[
+                df_coord['source'].isin(ONCOKB_TRUSTED_SOURCES),
+                ['chrom', 'pos', 'ref', 'alt', 'gene', 'hgvsp']
+            ].copy()
+            trusted_coord = trusted_coord[
+                trusted_coord['hgvsp'].notna() &
+                trusted_coord['hgvsp'].str.strip().ne('')
+            ]
+            trusted_coord['pos'] = trusted_coord['pos'].astype(int)
+            trusted_coord['_oncokb'] = trusted_coord.apply(
+                lambda r: oncokb_by_hgvsp.get((r['gene'], r['hgvsp']), ''),
+                axis=1
+            )
+            trusted_coord = trusted_coord[trusted_coord['_oncokb'] != '']
+            trusted_coord['_priority'] = trusted_coord['_oncokb'].map(onco_priority).fillna(99)
+            oncokb_by_coord = (
+                trusted_coord.sort_values('_priority')
+                .drop_duplicates(subset=['chrom', 'pos', 'ref', 'alt'], keep='first')
+                .set_index(['chrom', 'pos', 'ref', 'alt'])['_oncokb']
+                .to_dict()
+            )
+            log.info('OncoKB: %d variants resolved to coordinates via trusted sources',
+                     len(oncokb_by_coord))
+
             def _lookup_oncokb(row):
-                if row.get('oncokb_oncogenicity', ''):
-                    return row['oncokb_oncogenicity']
-                return oncokb_lookup.get((row['gene'], row['hgvsp']), '')
+                existing = row.get('oncokb_oncogenicity', '')
+                if existing and str(existing).strip() not in ('', 'nan', 'None'):
+                    return existing
+                coord_key = (row['chrom'], int(row['pos']), row['ref'], row['alt'])
+                hit = oncokb_by_coord.get(coord_key, '')
+                if hit:
+                    return hit
+                return oncokb_by_hgvsp.get((row['gene'], row['hgvsp']), '')
 
             df_agg['oncokb_oncogenicity'] = df_agg.apply(_lookup_oncokb, axis=1)
             n_annotated = (df_agg['oncokb_oncogenicity'] != '').sum()
+            n_coord = sum(
+                1 for row in df_agg.itertuples()
+                if oncokb_by_coord.get((row.chrom, int(row.pos), row.ref, row.alt), '') != ''
+            )
             log.info('OncoKB: %d variants annotated after join', n_annotated)
+            log.info('OncoKB: %d via coordinates, %d via (gene, hgvsp) fallback',
+                     n_coord, n_annotated - n_coord)
+
+    # -------------------------------------------------------------------------
+    # ClinVar significance join — post-aggregation, coordinate-based.
+    # Polars aggregation does not reliably carry this column through.
+    # -------------------------------------------------------------------------
+    if 'clinvar_clinical_significance' in df_coord.columns:
+        clinvar_rows = df_coord[
+            df_coord['source'] == 'ClinVar'
+        ][['chrom', 'pos', 'ref', 'alt', 'clinvar_clinical_significance']].copy()
+        clinvar_rows = clinvar_rows[
+            clinvar_rows['clinvar_clinical_significance'].str.strip().ne('')
+        ]
+        if not clinvar_rows.empty:
+            clinvar_rows['pos'] = clinvar_rows['pos'].astype(int)
+            clinvar_lookup = (
+                clinvar_rows
+                .drop_duplicates(subset=['chrom', 'pos', 'ref', 'alt'], keep='first')
+                .set_index(['chrom', 'pos', 'ref', 'alt'])['clinvar_clinical_significance']
+                .to_dict()
+            )
+            log.info('ClinVar significance lookup: %d entries', len(clinvar_lookup))
+            df_agg['clinvar_clinical_significance'] = df_agg.apply(
+                lambda row: clinvar_lookup.get(
+                    (row['chrom'], int(row['pos']), row['ref'], row['alt']),
+                    row.get('clinvar_clinical_significance', '')
+                ),
+                axis=1
+            )
+            n_cv = (df_agg['clinvar_clinical_significance'] != '').sum()
+            log.info('ClinVar significance: %d variants annotated after join', n_cv)
 
     return df_agg
 
@@ -831,6 +913,11 @@ def log_database_versions(cfg: dict, settings_file: str = 'settings.yaml') -> No
             version = f'downloaded {datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")}'
         _add('TP53 database', version, tsv)
 
+    # TCGA — version from filename
+    if ds.get('tcga', {}).get('enabled'):
+        maf = ds['tcga'].get('maf', '')
+        _add('TCGA mc3', 'v0.2.8', maf)
+
     # cBioPortal — live API, log URL
     if ds.get('cbioportal', {}).get('enabled'):
         version = 'live API'
@@ -945,6 +1032,33 @@ def main():
                         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
                 frames[name] = df
                 log.info('Loaded intermediate: %s  (%d rows)', path, len(df))
+
+        # Warn loudly if any enabled source has no intermediate.
+        # A missing intermediate means that source is silently absent from
+        # the whitelist, which can cause severe output degradation.
+        ds_check = cfg.get('data_sources', {})
+        source_to_frame = {
+            'cosmic': 'cosmic', 'genie': 'genie', 'tcga': 'tcga',
+            'clinvar': 'clinvar', 'tp53': 'tp53',
+            'cancer_hotspots': 'cancerhotspots', 'cbioportal': 'cbioportal',
+        }
+        for src_key, frame_key in source_to_frame.items():
+            if ds_check.get(src_key, {}).get('enabled', False):
+                if frame_key not in frames and src_key not in skip:
+                    log.warning(
+                        '='*60
+                    )
+                    log.warning(
+                        'MISSING intermediate for enabled source: %s '
+                        '(expected: %s/%s.tsv.gz)',
+                        src_key.upper(), inter_dir, frame_key
+                    )
+                    log.warning(
+                        'This source will be ABSENT from the whitelist. '
+                        'Run a full pipeline (without --from-intermediates) '
+                        'to reparse this source.'
+                    )
+                    log.warning('='*60)
     else:
         frames = run_parsers(cfg, skip, inter_dir=inter_dir)
 

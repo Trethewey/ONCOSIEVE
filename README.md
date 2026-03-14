@@ -1,7 +1,7 @@
 <div align="center">
   <h1>O N C O S I E V E</h1>
   <p>Pan-cancer variant curation and rescue tool</p>
-  <p><em>7 databases · 33.5 million variants · 30,547 curated whitelist entries</em></p>
+  <p><em>8 databases · 37.1 million variants · curated whitelist</em></p>
   <img src="https://github.com/user-attachments/assets/56304b21-8193-4e84-869a-347aadf7ab76" width="450"/>
   <p><strong>Author:</strong> Dr Christopher Trethewey<br>
   <strong>Email:</strong> christopher.trethewey@nhs.net</p>
@@ -25,19 +25,22 @@ Mutect2 post-filter calls. Designed for use in research NGS pipelines.
 
 ## Data sources
 
-| Source          | Version   | Type | Approx. variants (source total) | Notes                                                                  |
-|-----------------|-----------|------|---------------------------------|------------------------------------------------------------------------|
-| COSMIC          | v103      | File | ~25,000,000                     | GRCh38 TSV + VCF; >6,800 cancer types                                 |
-| AACR GENIE      | v19.0     | File | ~3,750,000                      | MAF; 271,837 samples / 227,696 patients; 19 cancer centres            |
-| ClinVar         | 2025      | File | ~1,000,000                      | GRCh38 VCF; pathogenic/likely pathogenic and somatic-flagged filtered |
-| OncoKB          | Current   | API  | ~7,700                          | ~850 genes; 130 cancer types; academic token required                  |
-| TP53 database   | R21       | File | ~29,900                         | GRCh38 CSV; functional annotations for >9,000 mutant proteins         |
-| cBioPortal      | Current   | API  | ~3,750,000*                     | Live REST API; 532 hg38-compatible studies queried                    |
-| CancerHotspots  | v2        | API  | ~3,181                          | Live REST API; 24,592 tumour samples; q-value filtered                |
-|                 |           |      |                                 |                                                                        |
-| **Raw total**   |           |      | **~33,540,781**                 | Pre-deduplication; significant inter-database overlap expected         |
+| Source          | Version      | Type | Approx. variants (source total) | Notes                                                                              |
+|-----------------|--------------|------|---------------------------------|------------------------------------------------------------------------------------|
+| COSMIC          | v103         | File | ~25,000,000                     | GRCh38 TSV + VCF; >6,800 cancer types                                             |
+| AACR GENIE      | v19.0        | File | ~3,750,000                      | MAF; 271,837 samples / 227,696 patients; 19 cancer centres; GRCh37 lifted to GRCh38 |
+| TCGA mc3        | v0.2.8       | File | ~3,600,963                      | PanCancer Atlas MAF; 33 cancer types; 10,295 tumours; GRCh37 lifted to GRCh38     |
+| ClinVar         | 2025         | File | ~1,000,000                      | GRCh38 VCF; pathogenic/likely pathogenic and somatic-flagged filtered              |
+| OncoKB          | Current      | File/API | ~7,700                      | ~850 genes; 130 cancer types; academic token or local file required               |
+| TP53 database   | R21          | File | ~29,900                         | GRCh38 CSV; functional annotations for >9,000 mutant proteins                     |
+| CancerHotspots  | v2           | API  | ~3,181                          | Live REST API; 24,592 tumour samples; q-value filtered                             |
+|                 |              |      |                                 |                                                                                    |
+| **Raw total**   |              |      | **~33,391,744**                 | Pre-deduplication; significant inter-database overlap expected                     |
 
-`*` cBioPortal figure reflects mutations retrieved by this pipeline, not the portal's full dataset.
+**Note on cBioPortal:** cBioPortal has been replaced by the TCGA mc3 PanCancer Atlas MAF as the
+pan-cancer count source. The TCGA dataset provides broader, reproducible, offline coverage of the
+same tumour population without live API dependency or 503 variability. `parse_cbioportal.py` is
+retained for optional use but is disabled by default.
 
 ---
 
@@ -60,16 +63,43 @@ oncosieve/
 │   ├── parse_clinvar.py
 │   ├── parse_oncokb.py
 │   ├── parse_tp53.py
-│   ├── parse_cbioportal.py
+│   ├── parse_cbioportal.py  # retained; disabled by default
+│   ├── parse_tcga.py
 │   └── parse_hotspots.py
 ├── tools/                   # Standalone utilities; run manually
 │   ├── annotate_panels.py
 │   ├── clinvar_vep_annotate.py
+│   ├── db_fix.py            # Liftover GRCh37->GRCh38 for GENIE and TCGA MAFs
+│   ├── fetch_cbioportal.py  # Optional: snapshot cBioPortal API data
 │   ├── hotspots_vep_remap.py
 │   ├── mane_audit.py
 │   └── mane_remap.py
 └── logs/                    # Auto-created on first run
 ```
+
+---
+
+## Data preparation
+
+GENIE and TCGA MAFs are distributed in GRCh37 and must be lifted to GRCh38
+before the pipeline can use them. This is a one-time step per data version.
+
+```bash
+# 1. Download GENIE MAF from Synapse (requires free account and data agreement)
+#    https://www.synapse.org/#!Synapse:syn7222066
+
+# 2. Download TCGA mc3 MAF from GDC PanCancer Atlas
+#    https://gdc.cancer.gov/about-data/publications/pancanatlas
+#    File: mc3.v0.2.8.PUBLIC.maf.gz  (md5: 639ad8f8386e98dacc22e439188aa8fa)
+
+# 3. Add TCGA path to config.yaml under data_sources.tcga.maf
+
+# 4. Run liftover (lifts both GENIE and TCGA, writes logs, updates config.yaml)
+python3 tools/db_fix.py --config config.yaml
+```
+
+Liftover logs are written alongside each lifted file recording date, chain file,
+row counts, and discard rate.
 
 ---
 
@@ -80,6 +110,18 @@ oncosieve/
 source ~/venv_ngs/bin/activate
 cd /path/to/oncosieve
 bash run_pipeline.sh /path/to/data/
+```
+
+Optional flags:
+```bash
+# Skip parsers; re-run merge/filter/output from saved intermediates
+bash run_pipeline.sh --from-intermediates
+
+# Run without OncoKB (no token required)
+bash run_pipeline.sh --skip-sources oncokb
+
+# Skip specific sources
+bash run_pipeline.sh --skip-sources cosmic,tcga
 ```
 
 ### 2. Annotate with diagnostic panels
