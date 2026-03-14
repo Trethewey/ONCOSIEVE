@@ -1,7 +1,7 @@
 <div align="center">
   <h1>ONCOSIEVE</h1>
   <p><strong>Pan-cancer somatic variant whitelist for Mutect2 post-filter rescue</strong></p>
-  <p>7 databases · 33,391,744 source variants · 33,971 curated whitelist entries</p>
+  <p>7 databases · 46,400,000 source variants · 33,971 curated whitelist entries</p>
   <img src="https://github.com/user-attachments/assets/56304b21-8193-4e84-869a-347aadf7ab76" width="450"/>
   <p>
     <strong>Author:</strong> Dr Christopher Trethewey<br>
@@ -29,7 +29,7 @@ Mutect2 post-filter calls. Designed for use in research NGS pipelines.
 
 | Source          | Version      | Type | Approx. variants (source total) | Notes                                                                              |
 |-----------------|--------------|------|---------------------------------|------------------------------------------------------------------------------------|
-| COSMIC          | v103         | File | ~25,000,000                     | GRCh38 TSV + VCF; >6,800 cancer types                                             |
+| COSMIC          | v103         | File | ~38,000,000                     | GRCh38 TSV + VCF; >6,800 cancer types                                             |
 | AACR GENIE      | v19.0        | File | ~3,750,000                      | MAF; 271,837 samples / 227,696 patients; 19 cancer centres; GRCh37 lifted to GRCh38 |
 | TCGA mc3        | v0.2.8       | File | ~3,600,963                      | PanCancer Atlas MAF; 33 cancer types; 10,295 tumours; GRCh37 lifted to GRCh38     |
 | ClinVar         | 2025         | File | ~1,000,000                      | GRCh38 VCF; pathogenic/likely pathogenic and somatic-flagged filtered              |
@@ -37,7 +37,7 @@ Mutect2 post-filter calls. Designed for use in research NGS pipelines.
 | TP53 database   | R21          | File | ~29,900                         | GRCh38 CSV; functional annotations for >9,000 mutant proteins                     |
 | CancerHotspots  | v2           | API  | ~3,181                          | Live REST API; 24,592 tumour samples; q-value filtered                             |
 |                 |              |      |                                 |                                                                                    |
-| **Raw total**   |              |      | **~33,391,744**                 | Pre-deduplication; significant inter-database overlap expected                     |
+| **Raw total**   |              |      | **~46,400,000**                 | Pre-deduplication; significant inter-database overlap expected                     |
 
 **Note on cBioPortal:** cBioPortal has been replaced by the TCGA mc3 PanCancer Atlas MAF as the
 pan-cancer count source. The TCGA dataset provides broader, reproducible, offline coverage of the
