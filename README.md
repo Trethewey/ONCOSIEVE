@@ -1,8 +1,9 @@
 <div align="center">
   <h1>ONCOSIEVE</h1>
-  <p><strong>Pan-cancer somatic variant whitelist for Mutect2 post-filter rescue</strong></p>
-  <p>7 databases · 46,400,000 source variants · 33,971 curated whitelist entries</p>
-  <img src="https://github.com/user-attachments/assets/56304b21-8193-4e84-869a-347aadf7ab76" width="450"/>
+  <p><strong>Pan-cancer somatic variant whitelist curation tool</strong></p>
+  <p><em>7 databases · 46.4 million variants </em></p>
+  <p><em>1 curated whitelist</em></p>
+  <img src="https://github.com/user-attachments/assets/56304b21-8193-4e84-869a-347aadf7ab76" width="550"/>
   <p>
     <strong>Author:</strong> Dr Christopher Trethewey<br>
     <strong>Email:</strong> christopher.trethewey@nhs.net
