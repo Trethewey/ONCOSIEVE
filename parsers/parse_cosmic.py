@@ -106,7 +106,7 @@ def _extract_alleles_from_cds(cds: str, strand: str) -> Optional[tuple[str, str]
 def _build_classification_lookup(classification_path: str) -> dict[str, str]:
     """
     Parse COSMIC Classification TSV and return a dict:
-    COSMIC_PHENOTYPE_ID (e.g. COSO36004862) -> PRIMARY_SITE (e.g. 'lung')
+    COSMIC_PHENOTYPE_ID (e.g. COSO36004862) -> PRIMARY_HISTOLOGY (e.g. 'carcinoma')
     """
     if not classification_path or not os.path.exists(classification_path):
         log.warning('COSMIC classification file not found: %s — cancer types will be phenotype IDs',
@@ -118,16 +118,16 @@ def _build_classification_lookup(classification_path: str) -> dict[str, str]:
     with opener(classification_path, 'rt') as fh:
         header = fh.readline().rstrip('\n').split('\t')
         col = {c: i for i, c in enumerate(header)}
-        if 'COSMIC_PHENOTYPE_ID' not in col or 'PRIMARY_SITE' not in col:
+        if 'COSMIC_PHENOTYPE_ID' not in col or 'PRIMARY_HISTOLOGY' not in col:
             log.error('Classification file missing required columns. Found: %s', header)
             return {}
         for line in fh:
             parts = line.rstrip('\n').split('\t')
             try:
-                pheno_id    = parts[col['COSMIC_PHENOTYPE_ID']].strip()
-                primary_site = parts[col['PRIMARY_SITE']].strip().lower()
-                if pheno_id and primary_site:
-                    lookup[pheno_id] = primary_site
+                pheno_id         = parts[col['COSMIC_PHENOTYPE_ID']].strip()
+                primary_histology = parts[col['PRIMARY_HISTOLOGY']].strip().lower()
+                if pheno_id and primary_histology:
+                    lookup[pheno_id] = primary_histology
             except IndexError:
                 continue
     log.info('COSMIC classification lookup: %d entries', len(lookup))

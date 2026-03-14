@@ -106,14 +106,21 @@ _TCGA_PROJECT_MAP: dict[str, str] = {
 def _cancer_type_from_barcode(barcode: str) -> str:
     """
     Extract cancer type from TCGA tumour sample barcode.
-    Format: TCGA-{project}-{participant}-{sample}-...
-    e.g. TCGA-BRCA-A1B2-01A -> 'breast invasive carcinoma'
+
+    NOTE: The mc3 MAF barcode format is TCGA-{TSS}-{Participant}-{Sample},
+    where position 1 is a two-digit Tissue Source Site (TSS) code (e.g. '02',
+    '06'), NOT the project abbreviation (BRCA, LUAD etc.). The mc3 MAF has no
+    dedicated project column. _TCGA_PROJECT_MAP therefore never matches numeric
+    TSS codes and cancer_type falls back to 'unspecified'. GENIE provides
+    accurate cancer type annotation for the same variants. A TSS-to-project
+    lookup table should be added in a future session to restore TCGA cancer type
+    annotation.
     """
     parts = str(barcode).split('-')
     if len(parts) >= 2:
         code = parts[1].upper()
-        return _TCGA_PROJECT_MAP.get(code, code.lower())
-    return 'unspecified'
+        return _TCGA_PROJECT_MAP.get(code, '')
+    return ''
 
 
 def parse_tcga(maf_path: str) -> pd.DataFrame:
