@@ -40,12 +40,7 @@ Mutect2 post-filter calls. Designed for use in research NGS pipelines.
 |                 |              |      |                                 |                                                                                    |
 | **Raw total**   |              |      | **~46,400,000**                 | Pre-deduplication; significant inter-database overlap expected                     |
 
-**Note on cBioPortal:** cBioPortal has been replaced by the TCGA mc3 PanCancer Atlas MAF as the
-pan-cancer count source. The TCGA dataset provides broader, reproducible, offline coverage of the
-same tumour population without live API dependency or 503 variability. `parse_cbioportal.py` is
-retained for optional use but is disabled by default.
 
----
 
 ## Directory structure
 ```
@@ -66,14 +61,12 @@ oncosieve/
 │   ├── parse_clinvar.py
 │   ├── parse_oncokb.py
 │   ├── parse_tp53.py
-│   ├── parse_cbioportal.py  # retained; disabled by default
 │   ├── parse_tcga.py
 │   └── parse_hotspots.py
 ├── tools/                   # Standalone utilities; run manually
 │   ├── annotate_panels.py
 │   ├── clinvar_vep_annotate.py
 │   ├── db_fix.py            # Liftover GRCh37->GRCh38 for GENIE and TCGA MAFs
-│   ├── fetch_cbioportal.py  # Optional: snapshot cBioPortal API data
 │   ├── hotspots_vep_remap.py
 │   ├── mane_audit.py
 │   └── mane_remap.py
@@ -111,6 +104,17 @@ row counts, and discard rate.
 ### 1. Build the whitelist
 
 Install Python dependencies first:
+```
+pandas>=2.0
+pyyaml>=6.0
+requests>=2.31
+pysam>=0.21
+polars>=0.20
+pyarrow>=14.0
+openpyxl>=3.1
+xlrd>=2.0
+```
+
 ```bash
 pip install -r requirements.txt
 ```
