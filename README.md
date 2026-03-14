@@ -46,17 +46,7 @@ ONCOSIEVE builds a pan-cancer somatic variant whitelist from multiple curated da
 
 ### ClinVar-only variants
 
-ClinVar variants with no supporting sample observations from count-based sources have `n_samples = 0`. These represent expert clinical curation rather than observed recurrence. A high-confidence output is provided that excludes these entries. See [Post-pipeline processing](#post-pipeline-processing).
-
-To filter ClinVar-only zero-sample variants from any TSV:
-```bash
-python3 -c "
-import pandas as pd
-df = pd.read_csv('pan_cancer_whitelist_GRCh38_full.tsv.gz', sep='\t', dtype=str)
-df = df[~((df['n_samples'] == '0') & (df['sources'] == 'ClinVar'))]
-df.to_csv('filtered.tsv.gz', sep='\t', index=False)
-"
-```
+ClinVar variants with no supporting sample observations from count-based sources have `n_samples = 0`. These represent expert clinical curation rather than observed recurrence. The post-pipeline step automatically produces a high-confidence output (`pan_cancer_whitelist_GRCh38_highconf.tsv.gz`) that excludes these entries. See [Post-pipeline processing](#post-pipeline-processing).
 
 ---
 
