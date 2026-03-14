@@ -185,7 +185,10 @@ def main():
     parser.add_argument('--config', default='config.yaml')
     parser.add_argument('--data-dir', default='',
                         help='Path to reference data directory (overrides relative paths in config)')
+    parser.add_argument('--skip-sources', default='',
+                        help='Comma-separated sources to skip, e.g. "oncokb,tcga"')
     args = parser.parse_args()
+    skip_sources = {s.strip().lower() for s in args.skip_sources.split(',') if s.strip()}
 
     section('Configuration')
     if not file_exists(args.config):
@@ -308,13 +311,103 @@ def main():
             info(f'{len(cols)} columns detected', ', '.join(cols[:6]) + ' ...')
             chrom = detect_chrom_style(maf)
             info(f'Chromosome style: {chrom["style"]}', str(chrom["sample"]))
+            # Check NCBI_Build to confirm liftover has been run
+            build_val = ''
+            try:
+                import gzip as _gz
+                _opener = _gz.open if maf.endswith('.gz') else open
+                with _opener(maf, 'rt') as _fh:
+                    for _line in _fh:
+                        if _line.startswith('#'):
+                            continue
+                        _hdrs = _line.rstrip('\n').split('\t')
+                        _col_i = {c: i for i, c in enumerate(_hdrs)}
+                        _nb_i = _col_i.get('NCBI_Build')
+                        if _nb_i is None:
+                            break
+                        for _dline in _fh:
+                            _parts = _dline.rstrip('\n').split('\t')
+                            if _nb_i < len(_parts):
+                                build_val = _parts[_nb_i].strip()
+                            break
+                        break
+            except Exception:
+                pass
+            if build_val.upper() in ('GRCH38', 'HG38', '38'):
+                ok(f'NCBI_Build: {build_val} (GRCh38 confirmed)')
+            elif build_val:
+                fail(
+                    f'GENIE NCBI_Build: {build_val} — MAF appears to be GRCh37, not GRCh38',
+                    'Run: python3 tools/db_fix.py --genie-maf data/genie/data_mutations_extended.txt\n'
+                    '        Then update config.yaml genie.maf to point to the lifted file.'
+                )
+            else:
+                warn('Could not detect NCBI_Build — verify MAF is GRCh38')
         else:
-            fail(f'MAF missing: {maf}')
+            fail(
+                f'MAF missing: {maf}',
+                'Download GENIE MAF from Synapse: https://www.synapse.org/#!Synapse:syn7222066\n'
+                '        Then run: python3 tools/db_fix.py --genie-maf <path_to_downloaded_maf>'
+            )
         if file_exists(clinical):
             ok(f'Clinical sample file: {clinical}')
         else:
             warn(f'Clinical sample file missing: {clinical}',
                  'Cancer type labels will be unavailable for GENIE variants')
+
+    section('TCGA')
+    if 'tcga' in skip_sources:
+        skip('TCGA', '--skip-sources tcga specified')
+    elif not ds.get('tcga', {}).get('enabled', False):
+        skip('TCGA', 'disabled')
+    else:
+        maf = ds['tcga'].get('maf', '')
+        if file_exists(maf):
+            ok(f'MAF: {maf}')
+            cols = detect_columns(maf)
+            info(f'{len(cols)} columns detected', ', '.join(cols[:6]) + ' ...')
+            chrom = detect_chrom_style(maf)
+            info(f'Chromosome style: {chrom["style"]}', str(chrom["sample"]))
+            # Check NCBI_Build to confirm liftover has been run
+            build_val = ''
+            try:
+                import gzip as _gz
+                opener = _gz.open if maf.endswith('.gz') else open
+                with opener(maf, 'rt') as _fh:
+                    for _line in _fh:
+                        if _line.startswith('#'):
+                            continue
+                        _hdrs = _line.rstrip('\n').split('\t')
+                        _col_i = {c: i for i, c in enumerate(_hdrs)}
+                        _nb_i = _col_i.get('NCBI_Build')
+                        if _nb_i is None:
+                            break
+                        # Read first data row
+                        for _dline in _fh:
+                            _parts = _dline.rstrip('\n').split('\t')
+                            if _nb_i < len(_parts):
+                                build_val = _parts[_nb_i].strip()
+                            break
+                        break
+            except Exception:
+                pass
+            if build_val.upper() in ('GRCH38', 'HG38', '38'):
+                ok(f'NCBI_Build: {build_val} (GRCh38 confirmed)')
+            elif build_val:
+                fail(
+                    f'NCBI_Build: {build_val} — MAF appears to be GRCh37, not GRCh38',
+                    'Run: python3 tools/db_fix.py --tcga-maf data/TCGA/mc3.v0.2.8.PUBLIC.maf.gz\n'
+                    '        Then update config.yaml tcga.maf to point to the lifted file.'
+                )
+            else:
+                warn('Could not detect NCBI_Build — verify MAF is GRCh38')
+        else:
+            fail(
+                f'MAF missing: {maf}',
+                'Download mc3.v0.2.8.PUBLIC.maf.gz from:\n'
+                '        https://gdc.cancer.gov/about-data/publications/pancanatlas\n'
+                '        Then run: python3 tools/db_fix.py --tcga-maf data/TCGA/mc3.v0.2.8.PUBLIC.maf.gz'
+            )
 
     section('TP53 database')
     if not ds.get('tp53', {}).get('enabled', False):
@@ -336,7 +429,9 @@ def main():
                  'Set include_germline: false in settings.yaml to skip')
 
     section('OncoKB')
-    if not ds.get('oncokb', {}).get('enabled', False):
+    if 'oncokb' in skip_sources:
+        skip('OncoKB', '--skip-sources oncokb specified')
+    elif not ds.get('oncokb', {}).get('enabled', False):
         skip('OncoKB', 'disabled')
     else:
         variants_file = ds['oncokb'].get('variants_file', '')
@@ -352,8 +447,20 @@ def main():
             token = settings.get('oncokb', {}).get('api_token', '')
             if token and token not in ('', 'YOUR_TOKEN_HERE'):
                 ok('API token set')
+            elif file_exists(variants_file):
+                ok('API token not set — using local variants file (no token required)')
             else:
-                warn('No OncoKB API token', 'Set oncokb.api_token in settings.yaml')
+                fail(
+                    'OncoKB API token is missing or not set',
+                    'No local variants file found and no API token provided.\n'
+                    '        The pipeline will fire hundreds of API requests, all returning\n'
+                    '        HTTP 401, and oncokb_oncogenicity will be empty in the output.\n'
+                    '        Fix option 1: set oncokb.api_token in settings.yaml\n'
+                    '                      Tokens are free: https://www.oncokb.org/account/register\n'
+                    '                      Tokens expire every 6 months — renew at the same URL.\n'
+                    '        Fix option 2: download allAnnotatedVariants.txt from OncoKB and\n'
+                    '                      set oncokb.variants_file in config.yaml.'
+                )
 
     section('Chromosome naming')
     print('  All sources are normalised to plain style (1, 2, X, Y, MT)')

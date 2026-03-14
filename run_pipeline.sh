@@ -23,6 +23,7 @@
 #
 # Options:
 #   --skip-sources STR     Comma-separated sources to skip, e.g. "genie,cbioportal"
+#   --from-intermediates   Skip parsers; load saved intermediates and re-run merge/filter/output
 #   --intermediate-only    Run parsers and save intermediates; skip merge
 #   --rescue               Run Mutect2 post-filter rescue after building whitelist
 #   --mutect2-vcf PATH     Mutect2 FilterMutectCalls VCF (required if --rescue)
@@ -70,6 +71,7 @@ REFERENCE_FASTA="data/reference/GRCh38.fa"
 
 SKIP_SOURCES=""
 INTERMEDIATE_ONLY=false
+FROM_INTERMEDIATES=false
 DO_RESCUE=false
 MUTECT2_VCF=""
 TUMOR_SAMPLE=""
@@ -84,6 +86,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --skip-sources)      SKIP_SOURCES="$2";       shift 2 ;;
         --intermediate-only) INTERMEDIATE_ONLY=true;  shift   ;;
+        --from-intermediates) FROM_INTERMEDIATES=true; shift   ;;
         --rescue)            DO_RESCUE=true;           shift   ;;
         --mutect2-vcf)       MUTECT2_VCF="$2";        shift 2 ;;
         --tumor-sample)      TUMOR_SAMPLE="$2";        shift 2 ;;
@@ -116,7 +119,7 @@ log "Log file: $LOG_FILE"
 # =============================================================================
 
 log "Running pre-run audit..."
-"$PYTHON" pre_check.py --config "$CONFIG" ${DATA_DIR:+--data-dir "$DATA_DIR"} || die "Pre-run audit failed. Fix errors above before running pipeline."
+"$PYTHON" pre_check.py --config "$CONFIG" ${DATA_DIR:+--data-dir "$DATA_DIR"} ${SKIP_SOURCES:+--skip-sources "$SKIP_SOURCES"} || die "Pre-run audit failed. Fix errors above before running pipeline."
 
 # =============================================================================
 # STEP 1b: CHECK DEPENDENCIES
@@ -129,8 +132,6 @@ tabix --version 2>&1 | head -1 || die "tabix not found. Install htslib."
 bcftools --version | head -1   || die "bcftools not found."
 
 BCFTOOLS_VERSION=$(bcftools --version | head -1 | grep -oP '\d+\.\d+' | head -1)
-BCFTOOLS_MAJOR=$(echo "$BCFTOOLS_VERSION" | cut -d. -f1)
-BCFTOOLS_MINOR=$(echo "$BCFTOOLS_VERSION" | cut -d. -f2)
 
 log "  Python   : $("$PYTHON" --version)"
 log "  bcftools : $BCFTOOLS_VERSION"
@@ -151,7 +152,7 @@ log "  Done."
 
 WL_RAW="${OUTPUT_DIR}/${PREFIX}.vcf.gz"
 
-if [[ -f "$WL_RAW" ]]; then
+if [[ -f "$WL_RAW" ]] && ! $FROM_INTERMEDIATES; then
     log "Whitelist VCF already exists at $WL_RAW — skipping build step."
     log "  Delete $WL_RAW to force a full rebuild."
 else
@@ -160,6 +161,7 @@ else
     BUILD_ARGS="--config config.yaml${DATA_DIR:+ --data-dir $DATA_DIR}"
     [[ -n "$SKIP_SOURCES" ]] && BUILD_ARGS="$BUILD_ARGS --skip-sources $SKIP_SOURCES"
     $INTERMEDIATE_ONLY       && BUILD_ARGS="$BUILD_ARGS --intermediate-only"
+    $FROM_INTERMEDIATES      && BUILD_ARGS="$BUILD_ARGS --from-intermediates"
 
     "$PYTHON" build_whitelist.py $BUILD_ARGS \
         || die "build_whitelist.py failed."

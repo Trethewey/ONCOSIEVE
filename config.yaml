@@ -9,7 +9,7 @@ data_sources:
     enabled: true
     variants_file: data/oncokb/allAnnotatedVariants.txt
   cbioportal:
-    enabled: true
+    enabled: false
     api_base: https://www.cbioportal.org/api
   clinvar:
     enabled: true
@@ -28,9 +28,13 @@ data_sources:
     enabled: true
     tsv: data/hotspots/hotspots_grch38_mane.tsv
     max_qvalue: 0.05
+  tcga:
+    enabled: true
+    maf: data/TCGA/mc3.v0.2.8.PUBLIC.GRCh38.maf.gz
 reference:
   fasta: data/reference/GRCh38.fa
   liftover_chain: data/reference/hg19ToHg38.over.chain.gz
+  chain: data/reference/hg19ToHg38.over.chain.gz
 output:
   dir: output
   prefix: pan_cancer_whitelist_GRCh38
