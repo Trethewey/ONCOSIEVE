@@ -1,6 +1,6 @@
 <div align="center">
   <h1>ONCOSIEVE</h1>
-  <p><strong>Pan-cancer somatic variant whitelist curation tool</strong></p>
+  <p><strong>Pan-Cancer Somatic Variant Whitelist Curation Tool</strong></p>
   <p><em>7 databases · 46.4 million variants </em></p>
   <p><em>1 curated whitelist</em></p>
   <img src="https://github.com/user-attachments/assets/56304b21-8193-4e84-869a-347aadf7ab76" width="550"/>
