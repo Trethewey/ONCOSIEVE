@@ -1,10 +1,11 @@
 <div align="center">
-  <h1>O N C O S I E V E</h1>
-  <p>Pan-cancer variant curation and rescue tool</p>
-  <p><em>8 databases · 37.1 million variants · curated whitelist</em></p>
-  <img src="https://github.com/user-attachments/assets/56304b21-8193-4e84-869a-347aadf7ab76" width="450"/>
-  <p><strong>Author:</strong> Dr Christopher Trethewey<br>
-  <strong>Email:</strong> christopher.trethewey@nhs.net</p>
+  <h1>ONCOSIEVE</h1>
+  <p><strong>Pan-cancer somatic variant whitelist for Mutect2 post-filter rescue</strong></p>
+  <p>7 databases · 33,391,744 source variants · 33,971 curated whitelist entries</p>
+  <p>
+    <strong>Author:</strong> Dr Christopher Trethewey<br>
+    <strong>Email:</strong> christopher.trethewey@nhs.net
+  </p>
 </div>
 
 ---
@@ -31,7 +32,7 @@ Mutect2 post-filter calls. Designed for use in research NGS pipelines.
 | AACR GENIE      | v19.0        | File | ~3,750,000                      | MAF; 271,837 samples / 227,696 patients; 19 cancer centres; GRCh37 lifted to GRCh38 |
 | TCGA mc3        | v0.2.8       | File | ~3,600,963                      | PanCancer Atlas MAF; 33 cancer types; 10,295 tumours; GRCh37 lifted to GRCh38     |
 | ClinVar         | 2025         | File | ~1,000,000                      | GRCh38 VCF; pathogenic/likely pathogenic and somatic-flagged filtered              |
-| OncoKB          | Current      | File/API | ~7,700                      | ~850 genes; 130 cancer types; academic token or local file required               |
+| OncoKB          | Current      | API  | ~7,700                          | ~850 genes; 130 cancer types; academic token required                             |
 | TP53 database   | R21          | File | ~29,900                         | GRCh38 CSV; functional annotations for >9,000 mutant proteins                     |
 | CancerHotspots  | v2           | API  | ~3,181                          | Live REST API; 24,592 tumour samples; q-value filtered                             |
 |                 |              |      |                                 |                                                                                    |
@@ -92,10 +93,10 @@ before the pipeline can use them. This is a one-time step per data version.
 #    https://gdc.cancer.gov/about-data/publications/pancanatlas
 #    File: mc3.v0.2.8.PUBLIC.maf.gz  (md5: 639ad8f8386e98dacc22e439188aa8fa)
 
-# 3. Add TCGA path to config.yaml under data_sources.tcga.maf
-
-# 4. Run liftover (lifts both GENIE and TCGA, writes logs, updates config.yaml)
-python3 tools/db_fix.py --config config.yaml
+# 3. Run liftover (lifts both GENIE and TCGA; writes logs alongside each file)
+python3 tools/db_fix.py \
+    --genie-maf data/genie/data_mutations_extended.txt \
+    --tcga-maf  data/TCGA/mc3.v0.2.8.PUBLIC.maf.gz
 ```
 
 Liftover logs are written alongside each lifted file recording date, chain file,
@@ -106,9 +107,14 @@ row counts, and discard rate.
 ## Usage
 
 ### 1. Build the whitelist
+
+Install Python dependencies first:
 ```bash
-source ~/venv_ngs/bin/activate
-cd /path/to/oncosieve
+pip install -r requirements.txt
+```
+
+Then run the pipeline:
+```bash
 bash run_pipeline.sh /path/to/data/
 ```
 
@@ -172,20 +178,10 @@ VAF floors per tier are configurable in `settings.yaml` under `vaf_rescue`.
 
 ## Transcript annotation
 
-HGVSc strings in the whitelist are carried through from each source database
-via VEP annotation. All coordinate-resolved variants are annotated against
-MANE Select transcripts during the VEP remapping steps in data preparation
-(see `tools/hotspots_vep_remap.py`). HGVSc values use ENST accessions
-throughout.
-
-The `transcript_id` column in the annotated TSV contains the ENST accession
-extracted from `hgvsc`. The `protein_change` column contains the normalised
-3-letter HGVS protein change derived from `hgvsp`.
-
-**Note on `tools/mane_remap.py`:** This tool is not currently compatible with
-the pipeline output. It expects RefSeq NM_ accessions but the pipeline produces
-ENST-prefixed HGVSc values from VEP. It is retained for potential future use
-but should not be run as a post-processing step.
+HGVSc strings in the whitelist are carried through from source databases where
+available. They are not re-annotated by ONCOSIEVE. Transcript concordance across
+sources is not guaranteed; use coordinates (chrom, pos, ref, alt) as the
+authoritative join key.
 
 ---
 
@@ -199,3 +195,62 @@ Edit `config.yaml` to change file paths or disable sources.
 ## OncoKB token
 
 Academic licence. Token expires in 6 months. Update in `settings.yaml` under `oncokb.api_token`.
+
+Register at: https://www.oncokb.org/account/register
+
+---
+
+## References
+
+If you use ONCOSIEVE in published work, please cite the underlying databases
+using the references below.
+
+**COSMIC**
+Tate JG, Bamford S, Jubb HC, et al. COSMIC: the Catalogue Of Somatic Mutations
+In Cancer. Nucleic Acids Res. 2019;47(D1):D941-D947.
+doi:10.1093/nar/gky1015. PMID:30371878
+
+**AACR Project GENIE**
+The AACR Project GENIE Consortium. AACR Project GENIE: Powering Precision
+Medicine through an International Consortium. Cancer Discov.
+2017;7(8):818-831. doi:10.1158/2159-8290.CD-17-0151.
+Include the version of GENIE data used (e.g. v19.0) in your methods.
+
+**TCGA mc3 PanCancer Atlas**
+Ellrott K, Bailey MH, Saksena G, et al. Scalable Open Science Approach for
+Mutation Calling of Tumor Exomes Using Multiple Genomic Pipelines. Cell Syst.
+2018;6(3):271-281.e7. doi:10.1016/j.cels.2018.03.002. PMID:29596782
+
+**OncoKB**
+Suehnholz SP, Nissan MH, Zhang H, et al. Quantifying the Expanding Landscape
+of Clinical Actionability for Patients with Cancer. Cancer Discov.
+2024;14(1):49-65. doi:10.1158/2159-8290.CD-23-0467. PMID:37849038
+
+Chakravarty D, Gao J, Phillips SM, et al. OncoKB: A Precision Oncology
+Knowledge Base. JCO Precis Oncol. 2017;1:PO.17.00011.
+doi:10.1200/PO.17.00011. PMID:28890946
+
+**ClinVar**
+Landrum MJ, Lee JM, Benson M, et al. ClinVar: public archive of
+interpretations of clinically relevant variants. Nucleic Acids Res.
+2016;44(D1):D862-868. doi:10.1093/nar/gkv1222. PMID:26582918
+
+**NCI TP53 Database**
+de Andrade KC, Lee EE, Tookmanian EM, et al. The TP53 Database: transition
+from the International Agency for Research on Cancer to the US National Cancer
+Institute. Cell Death Differ. 2022;29(5):1071-1073.
+doi:10.1038/s41418-022-00976-3. PMID:35352025
+
+Database release: The TP53 Database (R21, Jan 2025): https://tp53.cancer.gov
+
+**Cancer Hotspots**
+Bandlamudi C, et al. Cancer type-specific variation in patterns of driver
+alterations across 50,000 tumors. (2026). cancerhotspots.org
+
+Chang MT, Asthana S, Gao SP, et al. Identifying recurrent mutations in cancer
+reveals widespread lineage diversity and mutational specificity. Nat Biotechnol.
+2016;34(2):155-163. doi:10.1038/nbt.3391. PMID:26619011
+
+Chang MT, et al. Accelerating discovery of functional mutant alleles in cancer.
+Cancer Discov. 2018;8(2):174-183. doi:10.1158/2159-8290.CD-17-0321.
+PMID:29247016
