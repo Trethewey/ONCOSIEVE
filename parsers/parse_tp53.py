@@ -9,28 +9,23 @@
 
 """
 parse_tp53.py
-Parse the IARC TP53 database (GRCh38) somatic and germline variant files.
+Parse the NCI TP53 database (GRCh38) somatic and germline variant files.
 
 Required files:
-  SomaticVariants_GRCh38.tsv   (primary)
-  GermlineVariants_GRCh38.tsv  (optional, if include_germline=True)
+  SomaticVariants_GRCh38.csv   (primary)
+  GermlineVariants_GRCh38.csv  (optional, if include_germline=True)
 
-Download:
-  https://tp53.isb-cgc.org/  (ISB-CGC mirror — recommended, TSV downloads)
-  or
-  https://tp53.fr/           (IARC primary — may require navigation to Download)
+Download: https://tp53.cancer.gov
 
-The ISB-CGC mirror provides direct TSV downloads. Columns vary slightly
-between releases. This parser handles both the ISB-CGC and IARC TSV formats
-and will log which columns it finds.
-
-Key column mappings attempted (in priority order):
-  - Genomic position : 'g_description_GRCh38', 'Chr38', 'Chr_GRCh38'
-  - REF/ALT          : 'WTcodon', 'Mutcodon', or inferred from g_description
-  - Consequence      : 'Effect', 'Mutation_type'
-  - Cancer type      : 'Topography', 'Primary_site', 'cancer_type'
-  - Sample ID        : 'Sample_ID', 'sample_id', 'Sample_Name'
-  - Occurrence count : 'Somatic_count', 'Count', 'somatic_count'
+Key column usage:
+  - Position  : g_description_GRCh38 (e.g. g.7675184A>G)
+  - REF/ALT   : parsed from g_description_GRCh38
+  - Consequence: Effect (case-insensitive)
+  - Filter    : DNE_LOFclass != 'NA' (excludes variants with no functional evidence)
+  - Cancer type: Morphology (histological diagnosis)
+  - HGVSc     : c_description
+  - HGVSp     : ProtDescription
+  - Count     : TCGA_ICGC_GENIE_count if available, else 1 per row
 """
 
 import os
@@ -50,57 +45,46 @@ from parsers.common import (
 
 log = setup_logger('TP53')
 
-# Regex to parse g.description_GRCh38: e.g. "g.7674220C>T" or "g.7673802_7673803del"
-_GDESC_SNV_RE  = re.compile(r'g\.(\d+)([ACGTacgt])>([ACGTacgt])')
-_GDESC_CHR_RE  = re.compile(r'^chr(\w+):')
+# Regex to parse g_description_GRCh38: e.g. "g.7674220C>T"
+_GDESC_SNV_RE = re.compile(r'g\.(\d+)([ACGTacgt])>([ACGTacgt])')
 
-# Consequence mapping for TP53 database-specific terms
+# Consequence mapping — case-insensitive lookup applied at parse time
 _TP53_CONSEQUENCE_MAP = {
-    'Missense':                  'missense',
-    'Nonsense':                  'nonsense',
-    'Silent':                    'synonymous',
-    'Splice':                    'splice_site',
-    'Frameshift':                'frameshift',
-    'In-frame':                  'inframe_indel',
-    'In frame':                  'inframe_indel',
-    'Deletion':                  'frameshift',
-    'Insertion':                 'frameshift',
-    'Complex':                   'frameshift',
-    'Intronic':                  'intronic',
-    'Other':                     'unknown',
-    'Unknown':                   'unknown',
-    '':                          'unknown',
+    'missense':   'missense',
+    'nonsense':   'nonsense',
+    'silent':     'synonymous',
+    'splice':     'splice_site',
+    'frameshift': 'frameshift',
+    'in-frame':   'inframe_indel',
+    'in frame':   'inframe_indel',
+    'deletion':   'frameshift',
+    'insertion':  'frameshift',
+    'complex':    'frameshift',
+    'intronic':   'intronic',
+    'other':      'unknown',
+    'unknown':    'unknown',
+    '':           'unknown',
 }
+
+# DNE_LOFclass values to include (exclude 'NA')
+_DNE_LOF_INCLUDE = {'DNE_LOF', 'DNE', 'LOF'}
 
 
 def parse_tp53(somatic_tsv: str,
                germline_tsv: str | None = None,
                include_germline: bool = False) -> pd.DataFrame:
-    """
-    Parse IARC TP53 database TSV files.
-
-    Parameters
-    ----------
-    somatic_tsv      : path to SomaticVariants_GRCh38.tsv
-    germline_tsv     : path to GermlineVariants_GRCh38.tsv (optional)
-    include_germline : whether to include germline variants
-
-    Returns
-    -------
-    DataFrame with STANDARD_COLS schema.
-    """
     frames = []
 
     if os.path.exists(somatic_tsv):
-        log.info('Parsing TP53 somatic TSV: %s', somatic_tsv)
+        log.info('Parsing TP53 somatic file: %s', somatic_tsv)
         df = _parse_tp53_tsv(somatic_tsv, source_label='TP53_somatic')
         if df is not None and not df.empty:
             frames.append(df)
     else:
-        log.warning('TP53 somatic TSV not found: %s', somatic_tsv)
+        log.warning('TP53 somatic file not found: %s', somatic_tsv)
 
     if include_germline and germline_tsv and os.path.exists(germline_tsv):
-        log.info('Parsing TP53 germline TSV: %s', germline_tsv)
+        log.info('Parsing TP53 germline file: %s', germline_tsv)
         df = _parse_tp53_tsv(germline_tsv, source_label='TP53_germline')
         if df is not None and not df.empty:
             frames.append(df)
@@ -114,12 +98,10 @@ def parse_tp53(somatic_tsv: str,
 
 
 def _parse_tp53_tsv(path: str, source_label: str) -> pd.DataFrame | None:
-    # Auto-detect delimiter: CSV from tp53.cancer.gov or TSV from older releases
     sep = ',' if path.endswith('.csv') else '\t'
     try:
         df_raw = pd.read_csv(path, sep=sep, dtype=str, low_memory=False,
                              na_filter=False)
-        # If only one column was parsed, the delimiter guess was wrong — retry
         if len(df_raw.columns) == 1:
             sep = ',' if sep == '\t' else '\t'
             df_raw = pd.read_csv(path, sep=sep, dtype=str, low_memory=False,
@@ -128,106 +110,103 @@ def _parse_tp53_tsv(path: str, source_label: str) -> pd.DataFrame | None:
         log.error('Failed to read TP53 file %s: %s', path, e)
         return None
 
-    log.debug('TP53 columns in %s: %s', path, list(df_raw.columns))
+    log.info('TP53 columns found: %s', list(df_raw.columns))
     df_raw = df_raw.fillna('')
 
-    # Detect column names for this release
-    chrom_col  = _find_col(df_raw, ['Chr38', 'Chr_GRCh38', 'chr38'])
-    pos_col    = _find_col(df_raw, ['g_description_GRCh38', 'Genome_GRCh38_position'])
-    effect_col = _find_col(df_raw, ['Effect', 'Mutation_type', 'mutation_type'])
-    ctype_col  = _find_col(df_raw, ['Topography', 'Primary_site', 'cancer_type', 'primary_site'])
-    sample_col = _find_col(df_raw, ['Sample_ID', 'sample_id', 'Sample_Name'])
-    count_col  = _find_col(df_raw, ['Somatic_count', 'Count', 'somatic_count', 'count'])
-    hgvsp_col  = _find_col(df_raw, ['c_description', 'HGVSp', 'AAchange'])
-    hgvsc_col  = _find_col(df_raw, ['c_description', 'HGVSc'])
-    ref_col    = _find_col(df_raw, ['WTbase', 'Ref_base', 'ref'])
-    alt_col    = _find_col(df_raw, ['Mutbase', 'Alt_base', 'alt'])
+    # Locate required columns
+    pos_col      = _find_col(df_raw, ['g_description_GRCh38'])
+    effect_col   = _find_col(df_raw, ['Effect', 'Mutation_type', 'mutation_type'])
+    dnelof_col   = _find_col(df_raw, ['DNE_LOFclass'])
+    morpho_col   = _find_col(df_raw, ['Morphology', 'Short_topo', 'Topography'])
+    count_col    = _find_col(df_raw, ['TCGA_ICGC_GENIE_count', 'Somatic_count', 'Count'])
+    hgvsp_col    = _find_col(df_raw, ['ProtDescription', 'HGVSp', 'AAchange'])
+    hgvsc_col    = _find_col(df_raw, ['c_description', 'HGVSc'])
 
+    if not pos_col:
+        log.error('TP53: g_description_GRCh38 column not found — cannot parse positions')
+        return None
+
+    n_skipped_dnelof = 0
+    n_skipped_pos    = 0
     rows = []
+
     for _, row in df_raw.iterrows():
         try:
-            # --- Chromosome ---
-            chrom = ''
-            if chrom_col:
-                chrom = normalise_chrom(row[chrom_col])
+            # --- DNE_LOFclass filter ---
+            if dnelof_col:
+                dnelof = str(row[dnelof_col]).strip()
+                if dnelof not in _DNE_LOF_INCLUDE:
+                    n_skipped_dnelof += 1
+                    continue
 
-            # --- Position and alleles ---
-            pos = None
-            ref = ''
-            alt = ''
-
-            gdesc = str(row.get(pos_col or '', '')).strip() if pos_col else ''
-
-            # Try to parse genomic description (e.g. "g.7674220C>T")
+            # --- Position and alleles from g_description_GRCh38 ---
+            gdesc = str(row[pos_col]).strip()
             m = _GDESC_SNV_RE.search(gdesc)
-            if m:
-                pos = int(m.group(1))
-                ref = m.group(2).upper()
-                alt = m.group(3).upper()
-            elif ref_col and alt_col:
-                # Use separate columns if present
-                ref = clean_allele(row[ref_col])
-                alt = clean_allele(row[alt_col])
-                # Position from numeric column if gdesc unparseable
-                if pos_col and row[pos_col].isdigit():
-                    pos = int(row[pos_col])
-
-            if pos is None or not ref or not alt:
+            if not m:
+                n_skipped_pos += 1
                 continue
+
+            pos = int(m.group(1))
+            ref = m.group(2).upper()
+            alt = m.group(3).upper()
+
             if not is_valid_allele(ref) or not is_valid_allele(alt):
                 continue
 
-            if not chrom:
-                # TP53 is always chr17
-                chrom = 'chr17'
+            # TP53 is always chr17
+            chrom = 'chr17'
 
-            # --- Consequence ---
-            effect_raw  = str(row[effect_col]).strip() if effect_col else ''
+            # --- Consequence (case-insensitive) ---
+            effect_raw  = str(row[effect_col]).strip().lower() if effect_col else ''
             consequence = _TP53_CONSEQUENCE_MAP.get(effect_raw,
                           map_consequence(effect_raw))
 
-            # --- Cancer type ---
-            cancer_type = str(row[ctype_col]).strip().lower() if ctype_col else 'unspecified'
-            if not cancer_type:
+            # --- Cancer type from Morphology ---
+            cancer_type = str(row[morpho_col]).strip().lower() if morpho_col else ''
+            if not cancer_type or cancer_type in ('', 'na', 'nan'):
                 cancer_type = 'unspecified'
 
             # --- Sample count ---
             n_samples = 1
-            if count_col and row[count_col].isdigit():
-                n_samples = int(row[count_col])
-            elif sample_col and row[sample_col]:
-                n_samples = 1
+            if count_col:
+                count_val = str(row[count_col]).strip()
+                if count_val.isdigit():
+                    n_samples = int(count_val)
 
-            hgvsp = str(row[hgvsp_col]).strip() if hgvsp_col else ''
+            # --- HGVSc and HGVSp ---
             hgvsc = str(row[hgvsc_col]).strip() if hgvsc_col else ''
+            hgvsp = str(row[hgvsp_col]).strip() if hgvsp_col else ''
 
             rows.append({
-                'chrom':        chrom,
-                'pos':          pos,
-                'ref':          ref,
-                'alt':          alt,
-                'gene':         'TP53',
-                'hgvsc':        hgvsc,
-                'hgvsp':        hgvsp,
-                'consequence':  consequence,
-                'cancer_type':  cancer_type,
-                'n_samples':    n_samples,
-                'source':       source_label,
+                'chrom':       chrom,
+                'pos':         pos,
+                'ref':         ref,
+                'alt':         alt,
+                'gene':        'TP53',
+                'hgvsc':       hgvsc,
+                'hgvsp':       hgvsp,
+                'consequence': consequence,
+                'cancer_type': cancer_type,
+                'n_samples':   n_samples,
+                'source':      source_label,
             })
         except (ValueError, TypeError, KeyError):
             continue
+
+    log.info(
+        'TP53 (%s): %d rows kept | %d excluded by DNE_LOFclass | %d excluded by unparseable position',
+        source_label, len(rows), n_skipped_dnelof, n_skipped_pos
+    )
 
     if not rows:
         log.warning('TP53: no rows produced from %s', path)
         return None
 
     df = pd.DataFrame(rows, columns=STANDARD_COLS)
-    log.info('TP53 (%s): %d rows', source_label, len(df))
     return df
 
 
 def _find_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
-    """Return the first candidate column name present in df, or None."""
     for c in candidates:
         if c in df.columns:
             return c

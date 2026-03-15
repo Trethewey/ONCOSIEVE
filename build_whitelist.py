@@ -32,10 +32,10 @@ from parsers.common import INCLUDED_CONSEQUENCES, STANDARD_COLS, setup_logger
 log = setup_logger('build_whitelist')
 
 # Sources that contribute to the sample count threshold
-COUNT_SOURCES = {'COSMIC', 'TCGA', 'GENIE', 'TP53_somatic', 'TP53_germline'}
+COUNT_SOURCES = {'COSMIC', 'TCGA', 'GENIE'}
 
 # Sources that are annotation/curated (not count-based)
-CURATED_SOURCES = {'OncoKB', 'ClinVar', 'CancerHotspots'}
+CURATED_SOURCES = {'OncoKB', 'ClinVar', 'CancerHotspots', 'TP53_somatic', 'TP53_germline'}
 
 # VCF header template
 _VCF_HEADER = """\

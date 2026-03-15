@@ -21,6 +21,7 @@
 
 import argparse
 import datetime
+import importlib.util
 import os
 import subprocess
 import sys
@@ -346,6 +347,9 @@ def main():
     ap.add_argument('--vcf',       required=True)
     ap.add_argument('--revel',     required=True)
     ap.add_argument('--out-dir',   default='output')
+    ap.add_argument('--logo',      default=None,
+                    help='Path to logo image for HTML report '
+                         '(default: assets/logo.jpg relative to repo root)')
     args = ap.parse_args()
 
     for f in [args.whitelist, args.vcf, args.revel]:
@@ -422,12 +426,46 @@ def main():
     wb_hc.save(hc_xlsx)
     print(f'  High-confidence xlsx: {hc_xlsx}')
 
+    print('\n[6/6] Generating HTML report...')
+    _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _report_script = os.path.join(_repo_root, 'tools', 'generate_report.py')
+    if not os.path.exists(_report_script):
+        print(f'  WARNING: generate_report.py not found at {_report_script}, skipping.')
+        report_path = None
+    else:
+        # Resolve logo: use --logo arg, else default to assets/logo.jpg in repo root
+        logo_path = args.logo
+        if logo_path is None:
+            _default_logo = os.path.join(_repo_root, 'assets', 'logo.jpg')
+            logo_path = _default_logo if os.path.exists(_default_logo) else None
+        if logo_path:
+            print(f'  Logo: {logo_path}')
+        else:
+            print('  No logo found at assets/logo.jpg, report will have no logo.')
+
+        # Load generate_report module dynamically (avoids sys.path manipulation)
+        spec = importlib.util.spec_from_file_location('generate_report', _report_script)
+        gr   = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gr)
+
+        report_date = datetime.datetime.now().strftime('%Y-%m-%d')
+        report_path = os.path.join(args.out_dir,
+                                   f'oncosieve_report_{report_date}.html')
+        gr.build_report(
+            wl,
+            wl_hc,
+            __import__('pathlib').Path(report_path),
+            logo_path=logo_path,
+        )
+
     print('\nPost-pipeline complete.')
     print(f'  Full TSV:             {full_tsv}')
     print(f'  High-confidence TSV:  {hc_tsv}')
     print(f'  High-confidence VCF:  {hc_vcf}')
     print(f'  Full xlsx:            {full_xlsx}')
     print(f'  High-confidence xlsx: {hc_xlsx}')
+    if report_path and os.path.exists(report_path):
+        print(f'  HTML report:          {report_path}')
 
 
 if __name__ == '__main__':
