@@ -10,13 +10,11 @@ __pycache__/
 *.log
 
 # User-specific settings containing API tokens — never commit
-settings.yaml
 logs/
 tools/db_audit.py
 tools/diagnose_hotspots.py
 tools/fix_hotspots_strand.py
 tools/report.txt
-settings.yaml
 oncosieve_handoff_2026-03-13_session3.txt
 panels/CHIP.bed
 panels/Pan_lymphoid.bed
