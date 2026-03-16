@@ -148,11 +148,11 @@ def _parse_file(variants_file: str, include_oncogenicity: list) -> pd.DataFrame:
     log.info('OncoKB file: %d / %d entries pass filter', len(df_f), len(df_raw))
 
     return _build_output(
-        genes=[str(r[_COL_GENE]).strip() for _, r in df_f.iterrows()],
-        alts=[str(r[_COL_ALT]).strip() for _, r in df_f.iterrows()],
-        effects=[str(r[_COL_EFFECT]).strip() for _, r in df_f.iterrows()],
+        genes=df_f[_COL_GENE].str.strip().tolist(),
+        alts=df_f[_COL_ALT].str.strip().tolist(),
+        effects=df_f[_COL_EFFECT].str.strip().tolist(),
         oncogenicities=df_f[_COL_ONCO].tolist(),
-        cancer_types=[str(r.get(_COL_CTYPE, '')).strip() for _, r in df_f.iterrows()],
+        cancer_types=df_f[_COL_CTYPE].str.strip().tolist() if _COL_CTYPE in df_f.columns else [''] * len(df_f),
     )
 
 

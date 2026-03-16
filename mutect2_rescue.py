@@ -11,42 +11,27 @@
 mutect2_rescue.py
 Post-filter rescue of Mutect2-filtered variants using the pan-cancer whitelist.
 
-This script takes:
-  1. A Mutect2 VCF that has been processed through FilterMutectCalls
-     (variants have FILTER values set, e.g. 'weak_evidence', 'low_allele_frac', etc.)
-  2. The whitelist VCF produced by build_whitelist.py
+Takes a FilterMutectCalls VCF and the whitelist VCF. For each filtered variant
+(FILTER != PASS), checks whitelist membership and tumour VAF >= min_vaf_rescue.
+If both pass, sets FILTER = 'whitelist_rescued' with INFO/WL_TIER and WL_SOURCES.
+Already-PASS variants are left unchanged. Original FILTER preserved in ORIGINAL_FILTER.
 
-For each variant in the Mutect2 VCF:
-  - If FILTER = PASS: leave unchanged.
-  - If FILTER != PASS (i.e. filtered-out): check whether the variant is
-    in the whitelist AND the tumour VAF >= min_vaf_rescue (default 0.005).
-    If both conditions are met: set FILTER = 'whitelist_rescued' and
-    annotate with INFO/WL_TIER and INFO/WL_SOURCES.
+NOTE: Multi-allelic records are rescued at the record level. If ALT1 is not in
+the whitelist but ALT2 is, the entire record is rescued including ALT1. To avoid
+this, decompose multi-allelic records before rescue:
 
-Usage:
-    python mutect2_rescue.py \\
-        --input   sample.filtered.vcf.gz \\
-        --whitelist pan_cancer_whitelist_GRCh38.vcf.gz \\
-        --output  sample.rescued.vcf.gz \\
-        --min-vaf 0.005 \\
-        --tumor-sample TUMOR   # as named in the VCF FORMAT column
+    bcftools norm -m- input.vcf.gz -O z -o input.decomposed.vcf.gz
+    tabix -p vcf input.decomposed.vcf.gz
 
-Output:
-    A new VCF with rescued variants. Requires pysam >= 0.21.
-
-Notes:
-  - Variants rescued by the whitelist retain their original FORMAT fields
-    (GT, AD, DP, AF etc.) unchanged. Only the FILTER column is modified.
-  - The original FILTER value is preserved in INFO/ORIGINAL_FILTER.
-  - Whitelist rescue is additive: variants already PASS are not modified.
-  - Requires the input VCF to be bgzipped and tabix-indexed, OR uncompressed.
-    A non-indexed gzip VCF is also handled (slower, no random access).
+Or pass --decompose to run this automatically (requires bcftools on PATH).
 """
 
 import argparse
-import gzip
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 from typing import Optional
 
 try:
@@ -59,15 +44,32 @@ import yaml
 RESCUE_FILTER_LABEL = 'whitelist_rescued'
 
 
-def load_whitelist(wl_vcf: str) -> dict[tuple, dict]:
-    """
-    Load whitelist VCF into an in-memory dict keyed by (chrom, pos, ref, alt).
-    Value: dict with WL_TIER, WL_SOURCES, ONCOKB.
+def decompose_multiallelic(input_vcf: str) -> str:
+    """Split multi-allelic records into biallelic using bcftools norm -m-.
 
-    Parameters
-    ----------
-    wl_vcf : path to whitelist VCF (plain, gzip, or bgzip+tabix)
+    Returns path to decomposed temp VCF (.vcf.gz). Caller is responsible
+    for cleanup. Raises RuntimeError if bcftools is not available.
     """
+    if not shutil.which('bcftools'):
+        raise RuntimeError(
+            'bcftools not found on PATH. Install bcftools or decompose '
+            'multi-allelic records manually before running rescue:\n'
+            '  bcftools norm -m- input.vcf.gz -O z -o input.decomposed.vcf.gz'
+        )
+    tmp = tempfile.NamedTemporaryFile(suffix='.vcf.gz', delete=False)
+    tmp.close()
+    print(f'[mutect2_rescue] Decomposing multi-allelic records → {tmp.name}',
+          flush=True)
+    subprocess.run(
+        ['bcftools', 'norm', '-m-', input_vcf, '-O', 'z', '-o', tmp.name],
+        check=True,
+    )
+    subprocess.run(['tabix', '-p', 'vcf', tmp.name], check=True)
+    return tmp.name
+
+
+def load_whitelist(wl_vcf: str) -> dict[tuple, dict]:
+    """Load whitelist VCF into dict keyed by (chrom, pos, ref, alt)."""
     wl: dict[tuple, dict] = {}
     vcf = pysam.VariantFile(wl_vcf, 'r')
     for rec in vcf.fetch():
@@ -137,17 +139,7 @@ def rescue(input_vcf: str,
            min_vaf: float = 0.005,
            tumour_sample: Optional[str] = None,
            vaf_floors: dict | None = None) -> None:
-    """
-    Main rescue function.
-
-    Parameters
-    ----------
-    input_vcf      : Mutect2 FilterMutectCalls output VCF (bgzip+tabix or plain)
-    whitelist_vcf  : whitelist VCF from build_whitelist.py
-    output_vcf     : output path (.vcf, .vcf.gz, or .vcf.bgz)
-    min_vaf        : minimum VAF to rescue (inclusive)
-    tumour_sample  : name of tumour sample column in the VCF; None = first sample
-    """
+    """Rescue filtered Mutect2 variants that appear in the whitelist above min_vaf."""
     if vaf_floors is None:
         vaf_floors = {'tier1': min_vaf, 'tier2': min_vaf, 'tier3': min_vaf}
     wl = load_whitelist(whitelist_vcf)
@@ -230,7 +222,7 @@ def rescue(input_vcf: str,
             vaf = get_vaf(rec, tumour_idx)
             if vaf is None or vaf < vaf_floor:
                 n_vaf_fail += 1
-                break
+                continue
 
             # RESCUE: modify the record
             original_filters = '|'.join(filters)
@@ -281,6 +273,9 @@ def main():
     ap.add_argument('--tumor-sample', default=None,
                     help='Name of the tumour sample column in the VCF '
                          '(default: first sample)')
+    ap.add_argument('--decompose', action='store_true',
+                    help='Decompose multi-allelic records with bcftools norm -m- '
+                         'before rescue (recommended; requires bcftools on PATH)')
     ap.add_argument('--config', default=None,
                     help='Optional config.yaml to read min_vaf_rescue from '
                          '(overrides --min-vaf)')
@@ -308,14 +303,27 @@ def main():
           f'Tier2={vaf_floors.get("tier2",min_vaf):.3f}  '
           f'Tier3={vaf_floors.get("tier3",min_vaf):.3f}')
 
-    rescue(
-        input_vcf      = args.input,
-        whitelist_vcf  = args.whitelist,
-        output_vcf     = args.output,
-        min_vaf        = min_vaf,
-        tumour_sample  = args.tumor_sample,
-        vaf_floors     = vaf_floors,
-    )
+    actual_input = args.input
+    decomposed_tmp = None
+    if args.decompose:
+        decomposed_tmp = decompose_multiallelic(args.input)
+        actual_input = decomposed_tmp
+
+    try:
+        rescue(
+            input_vcf      = actual_input,
+            whitelist_vcf  = args.whitelist,
+            output_vcf     = args.output,
+            min_vaf        = min_vaf,
+            tumour_sample  = args.tumor_sample,
+            vaf_floors     = vaf_floors,
+        )
+    finally:
+        if decomposed_tmp and os.path.exists(decomposed_tmp):
+            os.unlink(decomposed_tmp)
+            tbi = decomposed_tmp + '.tbi'
+            if os.path.exists(tbi):
+                os.unlink(tbi)
 
 
 if __name__ == '__main__':

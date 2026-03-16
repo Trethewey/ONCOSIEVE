@@ -92,7 +92,7 @@ def _vep_batch(variants: list[str]) -> list[dict]:
     POST a batch of VEP region strings. Returns list of VEP result dicts.
     Retries with exponential backoff on transient errors.
     """
-    payload = json.dumps({"regions": variants}).encode("utf-8")
+    payload = json.dumps({"variants": variants}).encode("utf-8")
     params  = "?MANE=1&hgvs=1&transcript_version=1"
     url     = _VEP_URL + params
 

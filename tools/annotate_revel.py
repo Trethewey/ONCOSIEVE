@@ -101,7 +101,8 @@ def main():
     print(f'  Variants with REVEL score: {n_scored} / {len(merged)}')
 
     print(f'Writing output: {args.out}')
-    merged.to_csv(args.out, sep='\t', index=False)
+    merged.to_csv(args.out, sep='\t', index=False,
+                  compression='gzip' if args.out.endswith('.gz') else None)
     print(f'  Columns: {list(merged.columns)}')
     print('Done.')
 

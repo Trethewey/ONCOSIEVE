@@ -37,6 +37,7 @@ normalises both to match the whitelist format.
 """
 
 import argparse
+import bisect
 import gzip
 import logging
 import os
@@ -62,6 +63,7 @@ def load_bed(path: str) -> dict:
     Load a BED file into a dict of {chrom: [(start, end), ...]} intervals.
     Coordinates are 0-based, half-open (standard BED).
     Chromosomes are normalised to strip the 'chr' prefix.
+    Intervals are sorted by start position for binary search.
     """
     intervals = defaultdict(list)
     with open(path) as fh:
@@ -81,6 +83,9 @@ def load_bed(path: str) -> dict:
             except ValueError:
                 continue
             intervals[chrom].append((start, end))
+    # Sort intervals by start for binary search
+    for chrom in intervals:
+        intervals[chrom].sort()
     return dict(intervals)
 
 
@@ -90,13 +95,18 @@ def in_bed(chrom: str, pos: int, intervals: dict) -> bool:
     for chrom in the BED intervals dict.
     BED is 0-based half-open, so a 1-based pos P overlaps [start, end) when:
         start < P <= end  (equivalently: start <= P-1 < end)
+    Uses binary search for O(log N) per query.
     """
     chrom = str(chrom).lstrip('chr')
     if chrom not in intervals:
         return False
     p0 = pos - 1  # convert to 0-based
-    for start, end in intervals[chrom]:
-        if start <= p0 < end:
+    ivs = intervals[chrom]
+    # Find rightmost interval whose start <= p0
+    idx = bisect.bisect_right(ivs, (p0, float('inf'))) - 1
+    # Check this interval and possibly the one before (overlapping intervals)
+    for i in range(max(0, idx), min(idx + 2, len(ivs))):
+        if ivs[i][0] <= p0 < ivs[i][1]:
             return True
     return False
 

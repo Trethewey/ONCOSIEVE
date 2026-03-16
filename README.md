@@ -14,7 +14,7 @@
 
 ## Overview
 
-ONCOSIEVE builds a pan-cancer somatic variant whitelist from multiple curated databases and applies it to rescue clinically relevant low-VAF variants from Mutect2 post-filter calls. Designed for use in research NGS pipelines.
+ONCOSIEVE builds a pan-cancer somatic variant whitelist from multiple curated databases and uses it to rescue low-VAF variants from Mutect2 post-filter calls. Designed for use in research NGS pipelines.
 
 > [!WARNING]
 > **Research use only.** ONCOSIEVE is an experimental research tool and has not been validated for clinical diagnostic use. It must not be used to inform patient management or clinical decision-making without independent validation in an accredited diagnostic setting.
@@ -42,7 +42,7 @@ ONCOSIEVE builds a pan-cancer somatic variant whitelist from multiple curated da
 - **TCGA**: cancer type is not resolvable from the mc3 MAF barcode (position 1 encodes a Tissue Source Site code, not a project abbreviation). TCGA rows contribute sample counts but leave cancer_type empty. A TSS lookup table will be added in a future release.
 - **ClinVar**: primary disease name from `CLNDN` field (first term only).
 - **OncoKB / CancerHotspots**: `pan_cancer`.
-- **TP53**: topography from the database `Topography` field.
+- **TP53**: morphology from the database `Morphology` field.
 
 ### ClinVar-only variants
 
@@ -81,7 +81,8 @@ oncosieve/
 │   ├── hotspots_vep_remap.py
 │   ├── mane_audit.py
 │   ├── mane_remap.py
-│   └── post_pipeline.py        # Post-pipeline: REVEL, high-confidence filter, xlsx export
+│   ├── post_pipeline.py        # Post-pipeline: REVEL, high-confidence filter, xlsx export, HTML report
+│   └── generate_report.py     # HTML report with Plotly charts and DataTables
 └── logs/                       # Auto-created on first run
 ```
 
@@ -107,12 +108,88 @@ pyarrow>=14.0
 openpyxl>=3.1
 xlrd>=2.0
 plotly>=5.0
+pyliftover>=0.4
 ```
 
 Install with:
 
 ```bash
 pip install -r requirements.txt
+```
+
+---
+
+## Quick start (new users)
+
+```bash
+# 1. Clone and install
+git clone <repo_url> && cd oncosieve.3.3
+pip install -r requirements.txt
+
+# 2. Copy settings.yaml.example to settings.yaml and add your OncoKB token
+cp settings.yaml.example settings.yaml
+# Edit settings.yaml: set oncokb.api_token
+
+# 3. Download source data (see Data Preparation below for URLs)
+#    Place files in the data/ subdirectories as shown in the directory structure
+
+# 4. Create required directories
+mkdir -p data/{cosmic,genie,TCGA,clinvar,tp53,hotspots,oncokb,REVEL,reference}
+mkdir -p output intermediate panels logs
+
+# 5. Liftover GENIE and TCGA from GRCh37 to GRCh38 (one-time)
+python3 tools/db_fix.py \
+    --genie-maf data/genie/data_mutations_extended.txt \
+    --tcga-maf  data/TCGA/mc3.v0.2.8.PUBLIC.maf.gz
+
+# 6. Remap CancerHotspots to GRCh38 MANE Select (one-time, requires internet)
+python3 tools/hotspots_vep_remap.py
+
+# 7. Index ClinVar VCF (must be BGZF-compressed with CSI index)
+bgzip -f data/clinvar/clinvar.vcf       # if not already BGZF
+tabix -p vcf -C data/clinvar/clinvar.vcf.gz
+
+# 8. Run pre-check to verify everything is in place
+python3 pre_check.py
+
+# 9. Run the full pipeline
+bash run_pipeline.sh
+```
+
+### Expected data directory layout
+
+```
+data/
+├── reference/
+│   ├── GRCh38.fa                    # Reference genome FASTA
+│   ├── GRCh38.fa.fai               # samtools index
+│   └── hg19ToHg38.over.chain.gz    # UCSC liftover chain
+├── cosmic/
+│   ├── Cosmic_GenomeScreensMutant_v103_GRCh38.tsv.gz
+│   ├── Cosmic_GenomeScreensMutant_v103_GRCh38.vcf.gz
+│   └── Cosmic_Classification_v103_GRCh38.tsv.gz
+├── genie/
+│   ├── data_mutations_extended.txt                    # Original (GRCh37)
+│   ├── data_mutations_extended_grch38_lifted.txt      # After db_fix.py
+│   └── data_clinical_sample.txt
+├── TCGA/
+│   ├── mc3.v0.2.8.PUBLIC.maf.gz                      # Original (GRCh37)
+│   └── mc3.v0.2.8.PUBLIC.GRCh38.maf.gz               # After db_fix.py
+├── clinvar/
+│   ├── clinvar.vcf.gz               # Must be BGZF-compressed
+│   └── clinvar.vcf.gz.csi           # Must be CSI index (not TBI)
+├── tp53/
+│   ├── SomaticVariants_GRCh38.csv
+│   └── GermlineVariants_GRCh38.csv  # Optional
+├── hotspots/
+│   ├── hotspots_v1.txt              # Source files
+│   ├── hotspots_v2.txt
+│   ├── hotspots_v3.txt
+│   └── hotspots_grch38_mane.tsv     # After hotspots_vep_remap.py
+├── oncokb/
+│   └── allAnnotatedVariants.txt     # Optional if using API token
+└── REVEL/
+    └── revel_with_transcript_ids    # ~6 GB uncompressed
 ```
 
 ---
@@ -147,6 +224,50 @@ python3 tools/db_fix.py \
     --tcga-maf  data/TCGA/mc3.v0.2.8.PUBLIC.maf.gz
 ```
 
+### ClinVar
+
+Download the GRCh38 VCF from NCBI FTP:
+
+```bash
+wget https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/clinvar.vcf.gz -P data/clinvar/
+
+# IMPORTANT: ClinVar VCF must be BGZF-compressed with a CSI index
+# If the downloaded file is plain gzip, recompress with bgzip:
+bgzip -d data/clinvar/clinvar.vcf.gz
+bgzip data/clinvar/clinvar.vcf
+
+# Create CSI index (not TBI — required for GRCh38)
+tabix -p vcf -C data/clinvar/clinvar.vcf.gz
+```
+
+### TP53
+
+Download from the NCI TP53 Database (no registration required):
+
+- URL: https://tp53.cancer.gov/download/
+- Files: `SomaticVariants_GRCh38.csv` (required), `GermlineVariants_GRCh38.csv` (optional)
+- Place in `data/tp53/`
+
+### CancerHotspots
+
+Download residue-level files from https://www.cancerhotspots.org:
+
+- `hotspots_v1.txt`, `hotspots_v2.txt`, `hotspots_v3.txt`
+- Place in `data/hotspots/`
+
+Then remap to GRCh38 MANE Select coordinates (one-time, requires internet access for Ensembl VEP API):
+
+```bash
+python3 tools/hotspots_vep_remap.py
+# Use --resume if interrupted
+```
+
+### OncoKB
+
+Register for an academic API token at https://www.oncokb.org/account/register (free, expires every 6 months). Set the token in `settings.yaml` under `oncokb.api_token`.
+
+Alternatively, download `allAnnotatedVariants.txt` from OncoKB and place in `data/oncokb/`.
+
 ### REVEL
 
 Download the REVEL v1.3 pre-computed score file:
@@ -156,7 +277,7 @@ wget https://rothsj06.dmz.hpc.mssm.edu/revel-v1.3_all_chromosomes.zip -P data/RE
 cd data/REVEL && unzip revel-v1.3_all_chromosomes.zip
 ```
 
-The extracted file `revel_with_transcript_ids` (~82 million rows, ~6 GB uncompressed) is required for post-pipeline REVEL annotation. Update the path passed to `post_pipeline.py`.
+The extracted file `revel_with_transcript_ids` (~82 million rows, ~6 GB uncompressed) is required for post-pipeline REVEL annotation. The pipeline picks this up automatically from `data/REVEL/revel_with_transcript_ids`.
 
 ---
 
@@ -183,7 +304,9 @@ bash run_pipeline.sh --skip-sources cosmic,tcga
 
 ### 2. Post-pipeline processing
 
-Run after the main pipeline to add REVEL scores, generate high-confidence outputs, and export Excel files:
+Post-pipeline processing (REVEL annotation, high-confidence filtering, Excel export, HTML report) runs automatically as step 7 of `run_pipeline.sh` if the REVEL file is present at `data/REVEL/revel_with_transcript_ids`.
+
+To run manually:
 
 ```bash
 python3 tools/post_pipeline.py \
@@ -202,6 +325,7 @@ This produces:
 | `pan_cancer_whitelist_GRCh38_highconf.tsv.gz` | High-confidence whitelist (ClinVar-only zero-sample variants removed) |
 | `pan_cancer_whitelist_GRCh38_highconf.vcf.gz` | High-confidence VCF |
 | `pan_cancer_whitelist_GRCh38_highconf.xlsx` | High-confidence Excel export with summary and data sheets |
+| `oncosieve_report_YYYY-MM-DD.html` | Interactive HTML report with Plotly charts, variant tables, and references |
 
 ### 3. Annotate with diagnostic panels
 
@@ -218,8 +342,11 @@ python3 tools/annotate_panels.py \
 python3 mutect2_rescue.py \
     --input     sample.vcf.gz \
     --whitelist output/pan_cancer_whitelist_GRCh38_highconf.vcf.gz \
-    --output    sample.rescued.vcf.gz
+    --output    sample.rescued.vcf.gz \
+    --decompose
 ```
+
+> **Note:** Multi-allelic records are rescued at the record level. Pass `--decompose` to split them into biallelic records first with `bcftools norm -m-` (recommended; requires bcftools on PATH). Without this, if any ALT in a multi-allelic record matches the whitelist, all ALTs in that record are rescued.
 
 ---
 
@@ -242,9 +369,10 @@ python3 mutect2_rescue.py \
 | 13 | sources | str | Pipe-delimited contributing source databases |
 | 14 | oncokb_oncogenicity | str | OncoKB oncogenicity classification |
 | 15 | clinvar_clinical_significance | str | ClinVar clinical significance |
-| 16 | wl_tier | int | Whitelist tier (1=highest confidence, 2=good evidence) |
-| 17 | genome_version | str | Genome build (GRCh38) |
-| 18 | revel_score | float | REVEL pathogenicity score (missense only; 0-1) |
+| 16 | tp53_class | str | TP53 functional classification (DNE_LOF, notDNE_LOF, notDNE_notLOF, unclass.) |
+| 17 | wl_tier | int | Whitelist tier (1=highest confidence, 2=good evidence, 3=count-based below Tier 2) |
+| 18 | genome_version | str | Genome build (GRCh38) |
+| 19 | revel_score | float | REVEL pathogenicity score (missense only; 0-1) |
 
 ---
 
@@ -256,7 +384,7 @@ python3 mutect2_rescue.py \
 | 2 | OncoKB Predicted Oncogenic, OR ClinVar pathogenic/somatic, OR CancerHotspots recurrent mutation, OR seen in ≥25 samples across ≥2 cancer types | 0.5% |
 | 3 | Count-based only, below Tier 2 threshold | 1.0% |
 
-Tier 3 is currently empty because the base filter for whitelist inclusion (n≥25, ct≥2) matches the Tier 2 count threshold. Tier 3 populates if the base filter is relaxed below the Tier 2 threshold in `settings.yaml`.
+Tier 3 contains variants that meet the base inclusion filter but fall below the Tier 2 count threshold. This includes TP53 database variants that pass on functional annotation rather than recurrence alone.
 
 VAF floors are configurable in `settings.yaml` under `vaf_rescue`.
 
@@ -288,34 +416,44 @@ Register at: https://www.oncokb.org/account/register
 If you use ONCOSIEVE in published work, please cite the underlying databases using the references below.
 
 **COSMIC**
-Tate JG, Bamford S, Jubb HC, et al. COSMIC: the Catalogue Of Somatic Mutations In Cancer. Nucleic Acids Res. 2019;47(D1):D941-D947. doi:10.1093/nar/gky1015. PMID:30371878
+Tate JG, Bamford S, Jubb HC, et al. COSMIC: the Catalogue Of Somatic Mutations In Cancer. Nucleic Acids Res. 2019;47(D1):D941-D947.
+[doi:10.1093/nar/gky1015](https://doi.org/10.1093/nar/gky1015) · [PMID:30371878](https://pubmed.ncbi.nlm.nih.gov/30371878/)
 
 **AACR Project GENIE**
-The AACR Project GENIE Consortium. AACR Project GENIE: Powering Precision Medicine through an International Consortium. Cancer Discov. 2017;7(8):818-831. doi:10.1158/2159-8290.CD-17-0151.
+The AACR Project GENIE Consortium. AACR Project GENIE: Powering Precision Medicine through an International Consortium. Cancer Discov. 2017;7(8):818-831.
+[doi:10.1158/2159-8290.CD-17-0151](https://doi.org/10.1158/2159-8290.CD-17-0151)
 Include the version of GENIE data used (e.g. v19.0) in your methods.
 
 **TCGA mc3 PanCancer Atlas**
-Ellrott K, Bailey MH, Saksena G, et al. Scalable Open Science Approach for Mutation Calling of Tumor Exomes Using Multiple Genomic Pipelines. Cell Syst. 2018;6(3):271-281.e7. doi:10.1016/j.cels.2018.03.002. PMID:29596782
+Ellrott K, Bailey MH, Saksena G, et al. Scalable Open Science Approach for Mutation Calling of Tumor Exomes Using Multiple Genomic Pipelines. Cell Syst. 2018;6(3):271-281.e7.
+[doi:10.1016/j.cels.2018.03.002](https://doi.org/10.1016/j.cels.2018.03.002) · [PMID:29596782](https://pubmed.ncbi.nlm.nih.gov/29596782/)
 
 **OncoKB**
-Suehnholz SP, Nissan MH, Zhang H, et al. Quantifying the Expanding Landscape of Clinical Actionability for Patients with Cancer. Cancer Discov. 2024;14(1):49-65. doi:10.1158/2159-8290.CD-23-0467. PMID:37849038
+Suehnholz SP, Nissan MH, Zhang H, et al. Quantifying the Expanding Landscape of Clinical Actionability for Patients with Cancer. Cancer Discov. 2024;14(1):49-65.
+[doi:10.1158/2159-8290.CD-23-0467](https://doi.org/10.1158/2159-8290.CD-23-0467) · [PMID:37849038](https://pubmed.ncbi.nlm.nih.gov/37849038/)
 
-Chakravarty D, Gao J, Phillips SM, et al. OncoKB: A Precision Oncology Knowledge Base. JCO Precis Oncol. 2017;1:PO.17.00011. doi:10.1200/PO.17.00011. PMID:28890946
+Chakravarty D, Gao J, Phillips SM, et al. OncoKB: A Precision Oncology Knowledge Base. JCO Precis Oncol. 2017;1:PO.17.00011.
+[doi:10.1200/PO.17.00011](https://doi.org/10.1200/PO.17.00011) · [PMID:28890946](https://pubmed.ncbi.nlm.nih.gov/28890946/)
 
 **ClinVar**
-Landrum MJ, Lee JM, Benson M, et al. ClinVar: public archive of interpretations of clinically relevant variants. Nucleic Acids Res. 2016;44(D1):D862-868. doi:10.1093/nar/gkv1222. PMID:26582918
+Landrum MJ, Lee JM, Benson M, et al. ClinVar: public archive of interpretations of clinically relevant variants. Nucleic Acids Res. 2016;44(D1):D862-868.
+[doi:10.1093/nar/gkv1222](https://doi.org/10.1093/nar/gkv1222) · [PMID:26582918](https://pubmed.ncbi.nlm.nih.gov/26582918/)
 
 **NCI TP53 Database**
-de Andrade KC, Lee EE, Tookmanian EM, et al. The TP53 Database: transition from the International Agency for Research on Cancer to the US National Cancer Institute. Cell Death Differ. 2022;29(5):1071-1073. doi:10.1038/s41418-022-00976-3. PMID:35352025
+de Andrade KC, Lee EE, Tookmanian EM, et al. The TP53 Database: transition from the International Agency for Research on Cancer to the US National Cancer Institute. Cell Death Differ. 2022;29(5):1071-1073.
+[doi:10.1038/s41418-022-00976-3](https://doi.org/10.1038/s41418-022-00976-3) · [PMID:35352025](https://pubmed.ncbi.nlm.nih.gov/35352025/)
 
-Database release: The TP53 Database (R21, Jan 2025): https://tp53.cancer.gov
+Database release: The TP53 Database (R21, Jan 2025): <https://tp53.cancer.gov>
 
 **Cancer Hotspots**
-Bandlamudi C, et al. Cancer type-specific variation in patterns of driver alterations across 50,000 tumors. (2026). cancerhotspots.org
+Bandlamudi C, et al. Cancer type-specific variation in patterns of driver alterations across 50,000 tumors. <https://www.cancerhotspots.org>
 
-Chang MT, Asthana S, Gao SP, et al. Identifying recurrent mutations in cancer reveals widespread lineage diversity and mutational specificity. Nat Biotechnol. 2016;34(2):155-163. doi:10.1038/nbt.3391. PMID:26619011
+Chang MT, Asthana S, Gao SP, et al. Identifying recurrent mutations in cancer reveals widespread lineage diversity and mutational specificity. Nat Biotechnol. 2016;34(2):155-163.
+[doi:10.1038/nbt.3391](https://doi.org/10.1038/nbt.3391) · [PMID:26619011](https://pubmed.ncbi.nlm.nih.gov/26619011/)
 
-Chang MT, et al. Accelerating discovery of functional mutant alleles in cancer. Cancer Discov. 2018;8(2):174-183. doi:10.1158/2159-8290.CD-17-0321. PMID:29247016
+Chang MT, et al. Accelerating discovery of functional mutant alleles in cancer. Cancer Discov. 2018;8(2):174-183.
+[doi:10.1158/2159-8290.CD-17-0321](https://doi.org/10.1158/2159-8290.CD-17-0321) · [PMID:29247016](https://pubmed.ncbi.nlm.nih.gov/29247016/)
 
 **REVEL**
-Ioannidis NM, Rothstein JH, Pejaver V, et al. REVEL: An Ensemble Method for Predicting the Pathogenicity of Rare Missense Variants. Am J Hum Genet. 2016;99(4):877-885. doi:10.1016/j.ajhg.2016.08.016. PMID:27666373
+Ioannidis NM, Rothstein JH, Pejaver V, et al. REVEL: An Ensemble Method for Predicting the Pathogenicity of Rare Missense Variants. Am J Hum Genet. 2016;99(4):877-885.
+[doi:10.1016/j.ajhg.2016.08.016](https://doi.org/10.1016/j.ajhg.2016.08.016) · [PMID:27666373](https://pubmed.ncbi.nlm.nih.gov/27666373/)

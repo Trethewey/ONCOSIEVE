@@ -198,7 +198,6 @@ def parse_cbioportal(api_base: str = API_BASE,
                                   'transcriptConsequenceSummary', {}).get(
                                   'hgvspShort', '') or '')
                 var_class   = str(mut.get('mutationType', '') or '')
-                sample_id   = str(mut.get('uniqueSampleKey', '') or '')
                 consequence = map_consequence(var_class)
 
                 all_rows.append({

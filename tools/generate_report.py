@@ -111,8 +111,9 @@ def _source_counts_str(df):
 
 
 def _revel_stat(df):
-    n = df["revel_score"].notna().sum()
-    pct = n / len(df) * 100
+    rs = pd.to_numeric(df["revel_score"], errors="coerce")
+    n = rs.notna().sum()
+    pct = n / len(df) * 100 if len(df) else 0
     return f"{n:,} ({pct:.1f}%)"
 
 
@@ -325,7 +326,7 @@ DISPLAY_COLS = [
     "chrom", "pos", "ref", "alt", "gene", "transcript_id",
     "hgvsc", "protein_change", "consequence", "wl_tier",
     "n_samples", "n_cancer_types", "sources",
-    "oncokb_oncogenicity", "clinvar_clinical_significance", "revel_score",
+    "oncokb_oncogenicity", "clinvar_clinical_significance", "tp53_class", "revel_score",
 ]
 
 _TIER_COL_IDX  = DISPLAY_COLS.index("wl_tier")
@@ -389,7 +390,7 @@ REFERENCES = [
      "Chang MT et al. Cancer Discov. 2018;8(2):174-183.",
      "doi:10.1158/2159-8290.CD-17-0321", "PMID:29247016"),
     ("CancerHotspots",
-     "Bandlamudi C et al. (2026). cancerhotspots.org.", "", ""),
+     "Bandlamudi C et al. cancerhotspots.org.", "", ""),
     ("REVEL",
      "Ioannidis NM et al. Am J Hum Genet. 2016;99(4):877-885.",
      "doi:10.1016/j.ajhg.2016.08.016", "PMID:27666373"),
@@ -711,7 +712,7 @@ def build_report(df_full, df_hc, out_path, logo_path=None):
 
         # Nav
         '<nav class="topnav">',
-        '  <span class="brand">ONCOSIEVE 3.3</span>',
+        '  <span class="brand">ONCOSIEVE v1.0</span>',
         '  <a href="#summary">Summary</a>',
         '  <a href="#table">Variant Table</a>',
         '  <a href="#sources">Sources</a>',
@@ -731,6 +732,7 @@ def build_report(df_full, df_hc, out_path, logo_path=None):
         '    <span class="header-sep"></span>',
         '    <p class="header-subtitle">Pan-Cancer Variant Whitelist</p>',
         f'    <div class="header-meta">GRCh38 &nbsp;&middot;&nbsp; Generated {report_date} &nbsp;&middot;&nbsp; COSMIC &middot; GENIE &middot; TCGA &middot; ClinVar &middot; OncoKB &middot; CancerHotspots &middot; TP53</div>',
+        '    <div class="header-meta"><a href="https://github.com/Trethewey/ONCOSIEVE" style="color:#3D6E8F;text-decoration:none;">&#128279; github.com/Trethewey/ONCOSIEVE</a></div>',
         "  </div>",
         "</div>",
 
@@ -791,7 +793,7 @@ def build_report(df_full, df_hc, out_path, logo_path=None):
 
         # Footer
         '<div class="page-footer">',
-        f"  ONCOSIEVE 3.3 &nbsp;&middot;&nbsp; GRCh38 &nbsp;&middot;&nbsp; {report_date}",
+        f"  ONCOSIEVE v1.0 &nbsp;&middot;&nbsp; GRCh38 &nbsp;&middot;&nbsp; {report_date}",
         "</div>",
 
         "</div><!-- /container -->",

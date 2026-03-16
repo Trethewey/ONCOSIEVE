@@ -24,11 +24,7 @@ import pandas as pd
 
 from parsers.common import (
     STANDARD_COLS,
-    clean_allele,
     empty_standard_df,
-    is_valid_allele,
-    map_consequence,
-    normalise_chrom,
     setup_logger,
 )
 
@@ -62,60 +58,62 @@ def parse_hotspots(tsv_path: str,
         log.error('Failed to read hotspots TSV: %s', e)
         return empty_standard_df()
 
-    rows = []
-    n_skipped_qvalue = 0
-    n_skipped_allele = 0
+    from parsers.common import CONSEQUENCE_MAP
 
-    for _, row in df.iterrows():
-        # q-value filter
-        try:
-            qval = float(row.get('qvalue', 1.0) or 1.0)
-        except (ValueError, TypeError):
-            qval = 1.0
-        if qval > max_qvalue:
-            n_skipped_qvalue += 1
-            continue
+    # Vectorized processing
+    # q-value filter
+    df['qvalue'] = pd.to_numeric(df.get('qvalue', pd.Series(dtype=float)), errors='coerce').fillna(1.0)
+    n_before = len(df)
+    df = df[df['qvalue'] <= max_qvalue].copy()
+    n_skipped_qvalue = n_before - len(df)
 
-        chrom = normalise_chrom(str(row.get('chrom', '') or ''))
-        ref   = clean_allele(str(row.get('ref', '') or ''))
-        alt   = clean_allele(str(row.get('alt', '') or ''))
+    # Clean alleles
+    df['ref'] = df['ref'].fillna('').str.strip().str.upper()
+    df['alt'] = df['alt'].fillna('').str.strip().str.upper()
 
-        if not is_valid_allele(ref) or not is_valid_allele(alt):
-            n_skipped_allele += 1
-            continue
+    # Filter invalid alleles
+    valid_re = r'^[ACGTNacgtn*\-]+$'
+    valid_mask = df['ref'].str.match(valid_re, na=False) & df['alt'].str.match(valid_re, na=False)
+    n_skipped_allele = (~valid_mask).sum()
+    df = df[valid_mask].copy()
 
-        try:
-            pos = int(float(str(row.get('pos', 0))))
-        except (ValueError, TypeError):
-            n_skipped_allele += 1
-            continue
+    # Normalise chromosome
+    raw_chrom = df['chrom'].fillna('').str.strip().str.replace(r'^chr', '', regex=True)
+    raw_chrom = raw_chrom.replace({'MT': 'M', 'mt': 'M'})
+    df['chrom'] = 'chr' + raw_chrom
 
-        try:
-            n_samples = int(float(str(row.get('n_samples', 0) or 0)))
-        except (ValueError, TypeError):
-            n_samples = 0
+    # Position and samples
+    df['pos'] = pd.to_numeric(df['pos'], errors='coerce')
+    df = df.dropna(subset=['pos'])
+    df['pos'] = df['pos'].astype(int)
+    df['n_samples'] = pd.to_numeric(df.get('n_samples', 0), errors='coerce').fillna(0).astype(int)
 
-        rows.append({
-            'chrom':       chrom,
-            'pos':         pos,
-            'ref':         ref,
-            'alt':         alt,
-            'gene':        str(row.get('gene', '') or '').strip(),
-            'hgvsc':       str(row.get('hgvsc', '') or '').strip(),
-            'hgvsp':       str(row.get('hgvsp', '') or '').strip(),
-            'consequence': map_consequence(str(row.get('consequence', 'unknown') or 'unknown').strip()),
-            'cancer_type': 'pan_cancer',
-            'n_samples':   n_samples,
-            'source':      'CancerHotspots',
-        })
+    # String columns
+    for col in ('gene', 'hgvsc', 'hgvsp'):
+        if col in df.columns:
+            df[col] = df[col].fillna('').str.strip()
+        else:
+            df[col] = ''
+
+    # Consequence mapping
+    if 'consequence' in df.columns:
+        df['consequence'] = df['consequence'].fillna('unknown').str.strip().map(CONSEQUENCE_MAP).fillna('other')
+    else:
+        df['consequence'] = 'unknown'
+
+    df['cancer_type'] = 'pan_cancer'
+    df['source'] = 'CancerHotspots'
 
     log.info(
         'CancerHotspots: %d rows kept | %d excluded by q-value | %d excluded by invalid allele',
-        len(rows), n_skipped_qvalue, n_skipped_allele
+        len(df), n_skipped_qvalue, n_skipped_allele
     )
 
-    if not rows:
+    if df.empty:
         log.warning('CancerHotspots: no rows produced — check TSV and q-value threshold')
         return empty_standard_df()
 
-    return pd.DataFrame(rows, columns=STANDARD_COLS)
+    for col in STANDARD_COLS:
+        if col not in df.columns:
+            df[col] = ''
+    return df[STANDARD_COLS].reset_index(drop=True)

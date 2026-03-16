@@ -37,7 +37,6 @@ from typing import Optional
 import pandas as pd
 
 from parsers.common import (
-    INCLUDED_CONSEQUENCES,
     STANDARD_COLS,
     clean_allele,
     empty_standard_df,
@@ -58,7 +57,6 @@ _COL_CDS         = 'MUTATION_CDS'
 _COL_AA          = 'MUTATION_AA'
 _COL_DESC        = 'MUTATION_DESCRIPTION'
 _COL_SITE        = 'COSMIC_PHENOTYPE_ID'
-_COL_HISTOLOGY   = 'COSMIC_PHENOTYPE_ID'
 _COL_SAMPLE      = 'SAMPLE_NAME'
 _COL_SAMPLE_ID   = 'COSMIC_SAMPLE_ID'
 _COL_COSM_ID     = 'MUTATION_ID'
@@ -68,39 +66,6 @@ _COL_REF         = 'GENOMIC_WT_ALLELE'
 _COL_ALT         = 'GENOMIC_MUT_ALLELE'
 _COL_STRAND      = 'STRAND'
 _COL_STATUS      = 'MUTATION_SOMATIC_STATUS'
-
-# Regex to parse COSMIC genome position: e.g. "1:209968684-209968684"
-_POS_RE = re.compile(r'^(\w+):(\d+)-(\d+)$')
-
-# Regex for SNV in CDS: c.123A>G
-_SNV_CDS_RE = re.compile(r'c\.\d+([ACGTacgt])>([ACGTacgt])')
-
-
-def _parse_position(pos_str: str) -> Optional[tuple[str, int]]:
-    """Parse 'chr:start-end' -> (chrom_normalised, start_1based)."""
-    m = _POS_RE.match(str(pos_str).strip())
-    if not m:
-        return None
-    chrom = normalise_chrom(m.group(1))
-    return chrom, int(m.group(2))
-
-
-def _extract_alleles_from_cds(cds: str, strand: str) -> Optional[tuple[str, str]]:
-    """
-    Infer REF/ALT for simple SNVs from MUTATION_CDS.
-    Applies reverse-complement correction for negative-strand genes.
-    Returns None for indels or unresolvable entries.
-    """
-    m = _SNV_CDS_RE.search(str(cds))
-    if not m:
-        return None
-    ref_cds = m.group(1).upper()
-    alt_cds = m.group(2).upper()
-    if strand == '-':
-        rc = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C'}
-        ref_cds = rc.get(ref_cds, ref_cds)
-        alt_cds = rc.get(alt_cds, alt_cds)
-    return ref_cds, alt_cds
 
 
 def _build_classification_lookup(classification_path: str) -> dict[str, str]:
@@ -134,64 +99,19 @@ def _build_classification_lookup(classification_path: str) -> dict[str, str]:
     return lookup
 
 
-def _build_vcf_lookup(vcf_path: str) -> dict[str, tuple[str, str, str, str]]:
-    """
-    Parse COSMIC GRCh38 VCF and return a dict keyed by COSM/COSV ID.
-    Value: (chrom, pos, ref, alt)
-    Only stores the first ALT for multi-allelic records.
-    """
-    lookup: dict[str, tuple[str, str, str, str]] = {}
-    opener = gzip.open if vcf_path.endswith('.gz') else open
-    log.info('Building COSMIC VCF lookup from %s', vcf_path)
-    with opener(vcf_path, 'rt') as fh:
-        for line in fh:
-            if line.startswith('#'):
-                continue
-            parts = line.rstrip('\n').split('\t')
-            if len(parts) < 5:
-                continue
-            chrom, pos, id_field, ref, alt_field = parts[0], parts[1], parts[2], parts[3], parts[4]
-            chrom = normalise_chrom(chrom)
-            alt = alt_field.split(',')[0]   # take first ALT only
-            for cosm_id in id_field.split(';'):
-                cosm_id = cosm_id.strip()
-                if cosm_id and cosm_id not in lookup:
-                    lookup[cosm_id] = (chrom, pos, ref.upper(), alt.upper())
-    log.info('COSMIC VCF lookup: %d entries', len(lookup))
-    return lookup
-
-
 def parse_cosmic(tsv_path: str,
                  vcf_path: Optional[str] = None,
                  classification_path: Optional[str] = None,
                  chunk_size: int = 200_000,
                  n_threads: int = 4) -> pd.DataFrame:
-    """
-    Parse COSMIC mutation export TSV (GRCh38).
+    """Parse COSMIC mutation export TSV (GRCh38).
 
-    Parameters
-    ----------
-    tsv_path   : path to CosmicMutantExportCensus.tsv.gz
-    vcf_path   : path to COSMIC GRCh38 VCF (optional but recommended)
-    chunk_size : rows to read per chunk
-    n_threads  : worker processes for parallel parsing (default 4)
-
-    Returns
-    -------
-    DataFrame with STANDARD_COLS schema.
-    One row per (variant, cancer_type) with n_samples = count of unique
-    sample IDs in that cancer type.
+    Returns DataFrame with one row per (variant, cancer_type),
+    n_samples = count of unique sample IDs per cancer type.
     """
     if not os.path.exists(tsv_path):
         log.warning('COSMIC TSV not found: %s  — skipping', tsv_path)
         return empty_standard_df()
-
-    vcf_lookup: dict = {}
-    if vcf_path and os.path.exists(vcf_path):
-        vcf_lookup = _build_vcf_lookup(vcf_path)
-    else:
-        log.warning('COSMIC VCF not provided or not found; REF/ALT will be '
-                    'inferred from CDS for SNVs only.')
 
     classification_lookup: dict = {}
     if classification_path:
@@ -199,7 +119,7 @@ def parse_cosmic(tsv_path: str,
 
     usecols = [
         _COL_GENE, _COL_HGVSP, _COL_HGVSC, _COL_CDS, _COL_AA,
-        _COL_DESC, _COL_SITE, _COL_HISTOLOGY, _COL_SAMPLE_ID, _COL_COSM_ID,
+        _COL_DESC, _COL_SITE, _COL_SAMPLE_ID, _COL_COSM_ID,
         _COL_CHROM, _COL_START, _COL_REF, _COL_ALT,
         _COL_STRAND, _COL_STATUS,
     ]
@@ -225,12 +145,13 @@ def parse_cosmic(tsv_path: str,
             if shutil.which('pigz'):
                 log.info('COSMIC: decompressing with pigz (%d cores) → %s',
                          n_workers, tmp_path)
-                subprocess.run(
-                    ['pigz', '-d', '-c', '-p', str(n_workers), tsv_path],
-                    stdout=open(tmp_path, 'wb'),
-                    stderr=subprocess.DEVNULL,
-                    check=True,
-                )
+                with open(tmp_path, 'wb') as out_fh:
+                    subprocess.run(
+                        ['pigz', '-d', '-c', '-p', str(n_workers), tsv_path],
+                        stdout=out_fh,
+                        stderr=subprocess.DEVNULL,
+                        check=True,
+                    )
             else:
                 log.info('COSMIC: decompressing with gzip (install pigz for faster decompression)')
                 subprocess.run(
@@ -275,7 +196,7 @@ def parse_cosmic(tsv_path: str,
         log.info('COSMIC: processing %d byte-range sections with %d workers',
                  len(ranges), n_workers)
 
-        worker_args = [(plain_path, start, end, col_idx, vcf_lookup, classification_lookup)
+        worker_args = [(plain_path, start, end, col_idx, classification_lookup)
                        for start, end in ranges]
 
         with mp.Pool(processes=n_workers) as pool:
@@ -330,7 +251,6 @@ def _process_cosmic_section(path: str,
                              byte_start: int,
                              byte_end: int,
                              col_idx: dict,
-                             vcf_lookup: dict,
                              classification_lookup: dict) -> tuple[dict, dict]:
     """
     Read and process a byte-range section of a plain-text (decompressed) TSV.
@@ -353,16 +273,15 @@ def _process_cosmic_section(path: str,
             line = raw.decode('utf-8', errors='replace').rstrip('\n')
             chunk.append(line.split('\t'))
             if len(chunk) >= 50_000:
-                _process_cosmic_chunk(chunk, col_idx, vcf_lookup, classification_lookup, agg, meta)
+                _process_cosmic_chunk(chunk, col_idx, classification_lookup, agg, meta)
                 chunk = []
     if chunk:
-        _process_cosmic_chunk(chunk, col_idx, vcf_lookup, classification_lookup, agg, meta)
+        _process_cosmic_chunk(chunk, col_idx, classification_lookup, agg, meta)
     return agg, meta
 
 
 def _process_cosmic_chunk(chunk: list[list],
                            col_idx: dict[str, int],
-                           vcf_lookup: dict,
                            classification_lookup: dict,
                            agg: dict,
                            meta: dict) -> None:
@@ -384,7 +303,7 @@ def _process_cosmic_chunk(chunk: list[list],
             if not ref or not alt:
                 continue
 
-            chrom = chrom_raw.lstrip('chr')
+            chrom = chrom_raw[3:] if chrom_raw.startswith('chr') else chrom_raw
             try:
                 pos = int(start_raw)
             except ValueError:

@@ -7,11 +7,9 @@
 # Email  : christopher.trethewey@nhs.net
 # =============================================================================
 
-"""
-common.py
-Shared utilities, constants, and dataclass definitions for all source parsers.
-"""
+"""Shared constants and helper functions used by all parsers."""
 
+import gzip
 import logging
 import re
 import sys
@@ -133,12 +131,10 @@ def normalise_chrom(chrom: str) -> str:
 # ── Allele validation ─────────────────────────────────────────────────────────
 
 def is_valid_allele(allele: str) -> bool:
-    """Return True if allele contains only valid nucleotide characters."""
     return bool(allele) and bool(_VALID_ALLELE_CHARS.match(allele))
 
 
 def clean_allele(allele: str) -> str:
-    """Upper-case and strip an allele string."""
     return str(allele).strip().upper()
 
 
@@ -158,10 +154,6 @@ def map_consequence(raw: str) -> str:
         if mapped:
             return mapped
     return 'other'
-
-
-def consequence_is_included(consequence: str, included: set[str]) -> bool:
-    return consequence in included
 
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -217,25 +209,7 @@ def extract_snv_alleles_from_hgvsc(hgvsc: str) -> Optional[tuple[str, str]]:
 
 def resolve_column(available_cols: list, candidates: list, field_name: str,
                    required: bool = False, log=None) -> str:
-    """
-    Return the first column name from candidates that exists in available_cols.
-
-    Parameters
-    ----------
-    available_cols : list of str
-        Column names actually present in the file.
-    candidates : list of str
-        Ordered list of acceptable column names for this field, most preferred first.
-    field_name : str
-        Human-readable name for logging (e.g. 'chromosome', 'gene symbol').
-    required : bool
-        If True and no match found, raises RuntimeError.
-    log : logger or None
-
-    Returns
-    -------
-    str : matched column name, or '' if not found and not required.
-    """
+    """Return first column from candidates found in available_cols, or '' if missing."""
     for c in candidates:
         if c in available_cols:
             if log:
@@ -254,7 +228,6 @@ def detect_separator(path: str) -> str:
     Detect whether a file uses tab or comma as its delimiter.
     Returns '\t' or ','.
     """
-    import gzip
     opener = gzip.open if path.endswith('.gz') else open
     try:
         with opener(path, 'rt') as fh:
@@ -269,7 +242,6 @@ def get_file_columns(path: str, comment: str = '#') -> list:
     Return column names from the first non-comment line of a delimited file.
     Automatically detects separator.
     """
-    import gzip
     opener = gzip.open if path.endswith('.gz') else open
     sep = detect_separator(path)
     try:
@@ -289,7 +261,6 @@ def detect_chrom_prefix(path: str, chrom_col_idx: int = 0, n: int = 500,
 
     Returns one of: 'chr', 'plain', 'mixed', 'unknown'
     """
-    import gzip
     opener = gzip.open if path.endswith('.gz') else open
     chr_count   = 0
     plain_count = 0

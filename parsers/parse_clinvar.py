@@ -130,7 +130,13 @@ def parse_clinvar(vcf_path: str,
                 origin_m = _ORIGIN_RE.search(info)
                 if origin_m:
                     # CLNORIGIN bitmask: 2 = somatic
-                    origin_val = int(origin_m.group(1))
+                    # Can be multi-value e.g. "1|2"; bitwise-OR all values
+                    try:
+                        origin_val = 0
+                        for ov in origin_m.group(1).split('|'):
+                            origin_val |= int(ov.strip())
+                    except (ValueError, TypeError):
+                        origin_val = 0
                     if not (origin_val & 2):
                         n_skipped_origin += 1
                         continue
@@ -153,7 +159,9 @@ def parse_clinvar(vcf_path: str,
             mc_m        = _MC_RE.search(info)
             consequence = 'unknown'
             if mc_m:
-                mc_parts = mc_m.group(1).split('|')
+                # MC format: SO:accession|term,SO:accession|term,...
+                first_mc = mc_m.group(1).split(',')[0]
+                mc_parts = first_mc.split('|')
                 if len(mc_parts) > 1:
                     consequence = map_consequence(mc_parts[1])
 

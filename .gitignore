@@ -21,3 +21,6 @@ oncosieve_handoff_2026-03-13_session3.txt
 panels/CHIP.bed
 panels/Pan_lymphoid.bed
 panels/aSHM_and_aSHM_Morin.bed
+_backup_pre_sweep/
+.claude/
+temp/

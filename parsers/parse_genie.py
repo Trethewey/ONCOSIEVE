@@ -32,11 +32,11 @@ import os
 import pandas as pd
 
 from parsers.common import (
+    CONSEQUENCE_MAP,
     STANDARD_COLS,
     clean_allele,
     empty_standard_df,
     is_valid_allele,
-    map_consequence,
     normalise_chrom,
     setup_logger,
 )
@@ -106,52 +106,66 @@ def parse_genie(maf_path: str,
         log.error('GENIE MAF missing columns: %s', missing)
         return empty_standard_df()
 
-    rows = []
-    for _, row in df_maf.iterrows():
-        try:
-            chrom   = normalise_chrom(row[_MAF_COLS['chrom']])
-            pos_str = row[_MAF_COLS['pos']]
-            ref     = clean_allele(row[_MAF_COLS['ref']])
-            alt     = clean_allele(row[_MAF_COLS['alt']])
+    # Vectorized processing — avoids iterrows on ~3.4M rows
+    df = df_maf[[
+        _MAF_COLS['chrom'], _MAF_COLS['pos'], _MAF_COLS['ref'], _MAF_COLS['alt'],
+        _MAF_COLS['gene'], _MAF_COLS['hgvsc'], _MAF_COLS['hgvsp'],
+        _MAF_COLS['consequence'], _MAF_COLS['sample_id'],
+    ]].copy()
+    df.columns = ['chrom', 'pos', 'ref', 'alt', 'gene', 'hgvsc', 'hgvsp',
+                  'consequence', 'sample_id']
 
-            if not is_valid_allele(ref) or not is_valid_allele(alt):
-                continue
-            if alt in ('', '-', '.'):
-                continue
+    # Clean alleles
+    df['ref'] = df['ref'].str.strip().str.upper()
+    df['alt'] = df['alt'].str.strip().str.upper()
 
-            pos     = int(float(pos_str))
-            gene    = str(row[_MAF_COLS['gene']]).strip()
-            hgvsc   = str(row[_MAF_COLS['hgvsc']]).strip()
-            hgvsp   = str(row[_MAF_COLS['hgvsp']]).strip()
-            var_cls = str(row[_MAF_COLS['consequence']]).strip()
-            sample  = str(row[_MAF_COLS['sample_id']]).strip()
+    # Filter invalid alleles
+    valid_re = r'^[ACGTNacgtn*\-]+$'
+    mask = (
+        df['ref'].str.match(valid_re, na=False) &
+        df['alt'].str.match(valid_re, na=False) &
+        ~df['alt'].isin(['', '-', '.'])
+    )
+    df = df[mask].copy()
 
-            consequence = map_consequence(var_cls)
+    # Normalise chromosome: strip 'chr' prefix then re-add, handle MT
+    raw_chrom = df['chrom'].str.strip().str.replace(r'^chr', '', regex=True)
+    raw_chrom = raw_chrom.replace({'MT': 'M', 'mt': 'M'})
+    df['chrom'] = 'chr' + raw_chrom
 
-            # Cancer type: from clinical lookup or fall back to 'unspecified'
-            cancer_type = cancer_type_map.get(sample, 'unspecified').lower()
+    # Position
+    df['pos'] = pd.to_numeric(df['pos'], errors='coerce')
+    df = df.dropna(subset=['pos'])
+    df['pos'] = df['pos'].astype(int)
 
-            rows.append({
-                'chrom':        chrom,
-                'pos':          pos,
-                'ref':          ref,
-                'alt':          alt,
-                'gene':         gene,
-                'hgvsc':        hgvsc,
-                'hgvsp':        hgvsp,
-                'consequence':  consequence,
-                'cancer_type':  cancer_type,
-                'n_samples':    1,
-                'source':       'GENIE',
-            })
-        except (ValueError, TypeError):
-            continue
+    # Strip string columns
+    for col in ('gene', 'hgvsc', 'hgvsp'):
+        df[col] = df[col].str.strip()
 
-    if not rows:
+    # Map consequences vectorially
+    df['consequence'] = df['consequence'].str.strip().map(CONSEQUENCE_MAP).fillna('other')
+
+    # Cancer type from clinical lookup
+    df['sample_id'] = df['sample_id'].str.strip()
+    if cancer_type_map:
+        df['cancer_type'] = df['sample_id'].map(cancer_type_map).fillna('unspecified')
+    else:
+        df['cancer_type'] = 'unspecified'
+
+    df['n_samples'] = 1
+    df['source'] = 'GENIE'
+
+    # Drop sample_id and align to STANDARD_COLS
+    df = df.drop(columns=['sample_id'])
+    for col in STANDARD_COLS:
+        if col not in df.columns:
+            df[col] = ''
+    df = df[STANDARD_COLS]
+
+    if df.empty:
         log.warning('GENIE: no rows produced')
         return empty_standard_df()
 
-    df = pd.DataFrame(rows, columns=STANDARD_COLS)
     log.info('GENIE: %d rows', len(df))
     return df
 
@@ -170,12 +184,21 @@ def _load_clinical_sample(clinical_path: str) -> dict[str, str]:
         log.warning('Could not load clinical sample file: %s', e)
         return {}
 
-    lookup: dict[str, str] = {}
-    for _, row in df.iterrows():
-        sid = str(row.get(_CLINICAL_SAMPLE_ID_COL, '')).strip()
-        if not sid:
-            continue
-        ctype = str(row.get(_CLINICAL_CANCER_TYPE_COL,
-                            row.get(_CLINICAL_ONCOTREE_COL, 'unspecified'))).strip()
-        lookup[sid] = ctype.lower()
-    return lookup
+    if _CLINICAL_SAMPLE_ID_COL not in df.columns:
+        log.warning('Clinical file missing %s column', _CLINICAL_SAMPLE_ID_COL)
+        return {}
+
+    # Prefer CANCER_TYPE, fall back to ONCOTREE_CODE
+    if _CLINICAL_CANCER_TYPE_COL in df.columns:
+        ctype_col = _CLINICAL_CANCER_TYPE_COL
+    elif _CLINICAL_ONCOTREE_COL in df.columns:
+        ctype_col = _CLINICAL_ONCOTREE_COL
+    else:
+        log.warning('Clinical file has no cancer type column')
+        return {}
+
+    df = df[[_CLINICAL_SAMPLE_ID_COL, ctype_col]].copy()
+    df[_CLINICAL_SAMPLE_ID_COL] = df[_CLINICAL_SAMPLE_ID_COL].str.strip()
+    df[ctype_col] = df[ctype_col].str.strip().str.lower()
+    df = df[df[_CLINICAL_SAMPLE_ID_COL] != '']
+    return df.set_index(_CLINICAL_SAMPLE_ID_COL)[ctype_col].to_dict()

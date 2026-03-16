@@ -17,7 +17,6 @@ Usage:
 """
 
 import argparse
-import gzip
 import logging
 import os
 import sys
@@ -41,7 +40,7 @@ CURATED_SOURCES = {'OncoKB', 'ClinVar', 'CancerHotspots', 'TP53_somatic', 'TP53_
 _VCF_HEADER = """\
 ##fileformat=VCFv4.2
 ##fileDate={date}
-##source=pan_cancer_whitelist_pipeline
+##source=pan_cancer_whitelist_pipeline_v1.0
 ##reference=GRCh38/hg38
 ##contig=<ID=1,length=248956422,assembly=GRCh38>
 ##contig=<ID=2,length=242193529,assembly=GRCh38>
@@ -121,6 +120,7 @@ def load_config(path: str, data_dir: str = '') -> dict:
 
     # Load and merge settings.yaml if specified
     settings_file = cfg.pop('settings_file', 'settings.yaml')
+    cfg['settings_file'] = settings_file
     if os.path.exists(settings_file):
         with open(settings_file) as fh:
             settings = yaml.safe_load(fh) or {}
@@ -289,7 +289,8 @@ def run_parsers(cfg: dict, skip: set, inter_dir: str = 'intermediate') -> dict[s
         log.info('=== Running GENIE parser ===')
         genie_maf = ds['genie']['maf']
         genie_dir = os.path.dirname(genie_maf)
-        clinical  = os.path.join(genie_dir, 'data_clinical_sample.txt')
+        clinical  = ds['genie'].get('clinical_sample',
+                                    os.path.join(genie_dir, 'data_clinical_sample.txt'))
         frames['GENIE'] = parse_genie(
             maf_path              = genie_maf,
             clinical_sample_path  = clinical if os.path.exists(clinical) else None,
@@ -341,14 +342,6 @@ def run_parsers(cfg: dict, skip: set, inter_dir: str = 'intermediate') -> dict[s
         _save('OncoKB', frames['OncoKB'])
     return frames
 
-
-
-def _first_nonempty(series) -> str:
-    """Return the first non-empty, non-null value from a pandas Series, or ''."""
-    for val in series:
-        if val and str(val).strip() and str(val).strip().lower() not in ('nan', 'none', 'na'):
-            return str(val).strip()
-    return ''
 
 
 def merge_and_aggregate(frames: dict[str, pd.DataFrame],
@@ -444,10 +437,13 @@ def merge_and_aggregate(frames: dict[str, pd.DataFrame],
                 trusted_coord['hgvsp'].str.strip().ne('')
             ]
             trusted_coord['pos'] = trusted_coord['pos'].astype(int)
-            trusted_coord['_oncokb'] = trusted_coord.apply(
-                lambda r: oncokb_by_hgvsp.get((r['gene'], r['hgvsp']), ''),
-                axis=1
+            # Vectorized OncoKB lookup via merge instead of apply
+            _okb_df = pd.DataFrame(
+                [(g, h, v) for (g, h), v in oncokb_by_hgvsp.items()],
+                columns=['gene', 'hgvsp', '_oncokb']
             )
+            trusted_coord = trusted_coord.merge(_okb_df, on=['gene', 'hgvsp'], how='left')
+            trusted_coord['_oncokb'] = trusted_coord['_oncokb'].fillna('')
             trusted_coord = trusted_coord[trusted_coord['_oncokb'] != '']
             trusted_coord['_priority'] = trusted_coord['_oncokb'].map(onco_priority).fillna(99)
             oncokb_by_coord = (
@@ -459,22 +455,31 @@ def merge_and_aggregate(frames: dict[str, pd.DataFrame],
             log.info('OncoKB: %d variants resolved to coordinates via trusted sources',
                      len(oncokb_by_coord))
 
-            def _lookup_oncokb(row):
-                existing = row.get('oncokb_oncogenicity', '')
-                if existing and str(existing).strip() not in ('', 'nan', 'None'):
-                    return existing
-                coord_key = (row['chrom'], int(row['pos']), row['ref'], row['alt'])
-                hit = oncokb_by_coord.get(coord_key, '')
-                if hit:
-                    return hit
-                return oncokb_by_hgvsp.get((row['gene'], row['hgvsp']), '')
-
-            df_agg['oncokb_oncogenicity'] = df_agg.apply(_lookup_oncokb, axis=1)
-            n_annotated = (df_agg['oncokb_oncogenicity'] != '').sum()
-            n_coord = sum(
-                1 for row in df_agg.itertuples()
-                if oncokb_by_coord.get((row.chrom, int(row.pos), row.ref, row.alt), '') != ''
+            # Vectorized OncoKB join: coordinate-based, then gene+hgvsp fallback
+            _coord_df = pd.DataFrame(
+                [(c, p, r, a, v) for (c, p, r, a), v in oncokb_by_coord.items()],
+                columns=['chrom', 'pos', 'ref', 'alt', '_okb_coord']
             )
+            _coord_df['pos'] = _coord_df['pos'].astype(int)
+            df_agg['pos'] = df_agg['pos'].astype(int)
+            df_agg = df_agg.merge(_coord_df, on=['chrom', 'pos', 'ref', 'alt'], how='left')
+            df_agg['_okb_coord'] = df_agg['_okb_coord'].fillna('')
+
+            df_agg = df_agg.merge(_okb_df.rename(columns={'_oncokb': '_okb_hgvsp'}),
+                                  on=['gene', 'hgvsp'], how='left')
+            df_agg['_okb_hgvsp'] = df_agg['_okb_hgvsp'].fillna('')
+
+            # Priority: existing > coordinate > hgvsp fallback
+            existing = df_agg['oncokb_oncogenicity'].fillna('').astype(str)
+            has_existing = existing.str.strip().ne('') & existing.ne('nan') & existing.ne('None')
+            coord_hit = df_agg['_okb_coord'].ne('')
+            df_agg['oncokb_oncogenicity'] = existing
+            df_agg.loc[~has_existing & coord_hit, 'oncokb_oncogenicity'] = df_agg['_okb_coord']
+            df_agg.loc[~has_existing & ~coord_hit, 'oncokb_oncogenicity'] = df_agg['_okb_hgvsp']
+
+            n_annotated = (df_agg['oncokb_oncogenicity'] != '').sum()
+            n_coord = coord_hit.sum()
+            df_agg = df_agg.drop(columns=['_okb_coord', '_okb_hgvsp'])
             log.info('OncoKB: %d variants annotated after join', n_annotated)
             log.info('OncoKB: %d via coordinates, %d via (gene, hgvsp) fallback',
                      n_coord, n_annotated - n_coord)
@@ -492,20 +497,24 @@ def merge_and_aggregate(frames: dict[str, pd.DataFrame],
         ]
         if not clinvar_rows.empty:
             clinvar_rows['pos'] = clinvar_rows['pos'].astype(int)
-            clinvar_lookup = (
-                clinvar_rows
-                .drop_duplicates(subset=['chrom', 'pos', 'ref', 'alt'], keep='first')
-                .set_index(['chrom', 'pos', 'ref', 'alt'])['clinvar_clinical_significance']
-                .to_dict()
+            clinvar_dedup = clinvar_rows.drop_duplicates(
+                subset=['chrom', 'pos', 'ref', 'alt'], keep='first'
+            ).rename(columns={'clinvar_clinical_significance': '_cv_sig'})
+            log.info('ClinVar significance lookup: %d entries', len(clinvar_dedup))
+
+            # Vectorized merge instead of row-by-row apply
+            df_agg['pos'] = df_agg['pos'].astype(int)
+            df_agg = df_agg.merge(
+                clinvar_dedup[['chrom', 'pos', 'ref', 'alt', '_cv_sig']],
+                on=['chrom', 'pos', 'ref', 'alt'], how='left'
             )
-            log.info('ClinVar significance lookup: %d entries', len(clinvar_lookup))
-            df_agg['clinvar_clinical_significance'] = df_agg.apply(
-                lambda row: clinvar_lookup.get(
-                    (row['chrom'], int(row['pos']), row['ref'], row['alt']),
-                    row.get('clinvar_clinical_significance', '')
-                ),
-                axis=1
+            # Use merged value where existing is empty
+            existing_cv = df_agg['clinvar_clinical_significance'].fillna('')
+            merged_cv = df_agg['_cv_sig'].fillna('')
+            df_agg['clinvar_clinical_significance'] = existing_cv.where(
+                existing_cv != '', merged_cv
             )
+            df_agg = df_agg.drop(columns=['_cv_sig'])
             n_cv = (df_agg['clinvar_clinical_significance'] != '').sum()
             log.info('ClinVar significance: %d variants annotated after join', n_cv)
 
@@ -526,11 +535,13 @@ def _aggregate_polars(df_coord: pd.DataFrame) -> pd.DataFrame:
         df_coord['oncokb_oncogenicity'] = ''
     if 'clinvar_clinical_significance' not in df_coord.columns:
         df_coord['clinvar_clinical_significance'] = ''
+    if 'tp53_class' not in df_coord.columns:
+        df_coord['tp53_class'] = ''
 
     # Fill nulls for string columns before converting
     str_cols = ['chrom', 'ref', 'alt', 'source', 'cancer_type', 'gene',
                 'consequence', 'hgvsc', 'hgvsp', 'oncokb_oncogenicity',
-                'clinvar_clinical_significance']
+                'clinvar_clinical_significance', 'tp53_class']
     for c in str_cols:
         if c in df_coord.columns:
             df_coord[c] = df_coord[c].fillna('').astype(str)
@@ -615,6 +626,7 @@ def _aggregate_polars(df_coord: pd.DataFrame) -> pd.DataFrame:
             first_nonempty('hgvsp'),
             first_nonempty('oncokb_oncogenicity'),
             first_nonempty('clinvar_clinical_significance'),
+            first_nonempty('tp53_class'),
         ])
         .collect(engine="streaming")
     ).to_pandas()
@@ -631,6 +643,8 @@ def _aggregate_pandas(df_coord: pd.DataFrame) -> pd.DataFrame:
 
     if 'oncokb_oncogenicity' not in df_coord.columns:
         df_coord['oncokb_oncogenicity'] = ''
+    if 'tp53_class' not in df_coord.columns:
+        df_coord['tp53_class'] = ''
 
     def first_nonempty_agg(s):
         vals = s.dropna()
@@ -656,6 +670,7 @@ def _aggregate_pandas(df_coord: pd.DataFrame) -> pd.DataFrame:
     hgvsp_agg          = df_coord.groupby(key_cols)['hgvsp'].agg(first_nonempty_agg)
     oncokb_agg      = df_coord.groupby(key_cols)['oncokb_oncogenicity'].agg(first_nonempty_agg)
     clinvar_sig_agg = df_coord.groupby(key_cols)['clinvar_clinical_significance'].agg(first_nonempty_agg)
+    tp53_class_agg  = df_coord.groupby(key_cols)['tp53_class'].agg(first_nonempty_agg)
 
     df_agg = pd.DataFrame({
         'sources':                       sources_agg,
@@ -668,6 +683,7 @@ def _aggregate_pandas(df_coord: pd.DataFrame) -> pd.DataFrame:
         'hgvsp':                         hgvsp_agg,
         'oncokb_oncogenicity':           oncokb_agg,
         'clinvar_clinical_significance': clinvar_sig_agg,
+        'tp53_class':                    tp53_class_agg,
     }).reset_index()
 
     df_agg['n_samples']   = df_agg['n_samples'].fillna(0).astype(int)
@@ -696,16 +712,18 @@ def apply_filters(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     passes_oncokb  = df['oncokb_oncogenicity'].isin(
                          ['Oncogenic', 'Likely Oncogenic', 'Predicted Oncogenic'])
     passes_clinvar = df['sources'].str.contains('ClinVar', na=False)
-    passes_hotspot = df['sources'].str.contains('CancerHotspots', na=False)
+    passes_hotspot = df["sources"].str.contains("CancerHotspots", na=False)
+    passes_tp53    = df["sources"].str.contains("TP53", na=False)
 
-    mask = passes_count | passes_oncokb | passes_clinvar | passes_hotspot
+    mask = passes_count | passes_oncokb | passes_clinvar | passes_hotspot | passes_tp53
 
     df_pass = df[mask].copy()
     log.info('After filters: %d / %d variants retained', len(df_pass), len(df))
     log.info('  Count-based:   %d', passes_count.sum())
     log.info('  OncoKB:        %d', passes_oncokb.sum())
     log.info('  ClinVar:       %d', passes_clinvar.sum())
-    log.info('  CancerHotspot: %d', passes_hotspot.sum())
+    log.info("  CancerHotspot: %d", passes_hotspot.sum())
+    log.info("  TP53:          %d", passes_tp53.sum())
     return df_pass
 
 
@@ -735,12 +753,12 @@ def assign_tiers(df: pd.DataFrame, cfg: dict | None = None) -> pd.DataFrame:
 
     is_tier1 = (
         onco.isin(['Oncogenic', 'Likely Oncogenic'])
-        | (n_s >= t1_s) & (n_ct >= t1_ct)
+        | ((n_s >= t1_s) & (n_ct >= t1_ct))
     )
     is_tier2 = (
         (onco == 'Predicted Oncogenic')
         | srcs.str.contains('ClinVar|CancerHotspots', na=False)
-        | (n_s >= t2_s) & (n_ct >= t2_ct)
+        | ((n_s >= t2_s) & (n_ct >= t2_ct))
     )
 
     df['wl_tier'] = 3
@@ -758,7 +776,8 @@ def write_tsv(df: pd.DataFrame, path: str) -> None:
     out_cols = [
         'chrom', 'pos', 'ref', 'alt', 'gene', 'hgvsc', 'hgvsp',
         'consequence', 'n_cancer_types', 'cancer_types', 'n_samples',
-        'sources', 'oncokb_oncogenicity', 'clinvar_clinical_significance', 'wl_tier',
+        'sources', 'oncokb_oncogenicity', 'clinvar_clinical_significance',
+        'tp53_class', 'wl_tier',
     ]
     df_out = df[out_cols].sort_values(['chrom', 'pos'])
     df_out.to_csv(path, sep='\t', index=False,
@@ -774,13 +793,14 @@ def write_vcf(df: pd.DataFrame, path: str) -> None:
     chrom_order = {str(i): i for i in range(1, 23)}
     chrom_order.update({'X': 23, 'Y': 24, 'MT': 25, 'M': 25})
     df = df.copy()
-    df['chrom'] = df['chrom'].astype(str).str.replace(r'^chr', '', regex=True).str.replace('chrM', 'MT')
+    df['chrom'] = df['chrom'].astype(str).str.replace(r'^chr', '', regex=True)
+    df.loc[df['chrom'] == 'M', 'chrom'] = 'MT'
     df['_chrom_sort'] = df['chrom'].map(lambda c: chrom_order.get(c, 99))
     df = df.sort_values(['_chrom_sort', 'pos']).drop(columns='_chrom_sort')
 
     header = _VCF_HEADER.format(date=datetime.today().strftime('%Y%m%d'))
 
-    import subprocess, tempfile
+    import subprocess
 
     # Write to temp uncompressed file then bgzip for tabix compatibility
     tmp_path = path.replace('.gz', '') if path.endswith('.gz') else path + '.tmp'
@@ -981,7 +1001,7 @@ def main():
     log.setLevel(getattr(logging, cfg.get('log_level', 'INFO')))
 
     # Log database versions
-    log_database_versions(cfg, settings_file=cfg.get('_settings_file', 'settings.yaml'))
+    log_database_versions(cfg, settings_file=cfg.get('settings_file', 'settings.yaml'))
 
     inter_dir = cfg.get('intermediate_dir', 'intermediate')
     out_dir   = cfg.get('output', {}).get('dir', 'output')

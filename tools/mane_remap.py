@@ -45,7 +45,6 @@ Usage:
 
 import argparse
 import gzip
-import io
 import logging
 import os
 import sys

@@ -8,10 +8,11 @@
 #   1. Check dependencies
 #   2. Install Python requirements
 #   3. Build the whitelist (all parsers -> merge -> filter -> tier -> output)
-#   4. Normalise output VCF with bcftools norm
-#   5. Index output VCF with tabix
+#   4. Index output VCF with tabix
+#   5. Post-process whitelist (add genome_version, transcript_id, protein_change)
 #   6. Print summary statistics
-#   7. (Optional) Run Mutect2 post-filter rescue
+#   7. Post-pipeline (REVEL annotation, high-confidence filter, Excel, HTML report)
+#   8. (Optional) Run Mutect2 post-filter rescue
 #
 # Usage:
 #   bash run_pipeline.sh [data_dir] [options]
@@ -115,10 +116,20 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 log "Log file: $LOG_FILE"
 
 # =============================================================================
-# STEP 1: PRE-RUN AUDIT
+# BANNER
 # =============================================================================
 
+echo ""
+echo "  ╔══════════════════════════════════════════════════════════════╗"
+echo "  ║                                                              ║"
+echo "  ║                      O N C O S I E V E                       ║"
+echo "  ║                                                        v1.0  ║"
+echo "  ╚══════════════════════════════════════════════════════════════╝"
+echo "         Pan-Cancer Somatic Variant Whitelist Curation Tool"
+echo "                  github.com/Trethewey/ONCOSIEVE "
+echo ""
 log "Running pre-run audit..."
+echo ""
 "$PYTHON" pre_check.py --config "$CONFIG" ${DATA_DIR:+--data-dir "$DATA_DIR"} ${SKIP_SOURCES:+--skip-sources "$SKIP_SOURCES"} || die "Pre-run audit failed. Fix errors above before running pipeline."
 
 # =============================================================================
@@ -219,7 +230,26 @@ log "  TSV (base)      : $WL_TSV"
 log "  VCF             : ${WL_FINAL}"
 
 # =============================================================================
-# STEP 7: MUTECT2 POST-FILTER RESCUE (optional)
+# STEP 7: POST-PIPELINE (REVEL, high-confidence, Excel, HTML report)
+# =============================================================================
+
+REVEL_FILE="${DATA_DIR:-data}/REVEL/revel_with_transcript_ids"
+
+if [[ -f "$REVEL_FILE" ]]; then
+    log "Running post-pipeline processing..."
+    "$PYTHON" tools/post_pipeline.py \
+        --whitelist "$WL_TSV_ANNOTATED" \
+        --vcf       "$WL_FINAL" \
+        --revel     "$REVEL_FILE" \
+        --out-dir   "$OUTPUT_DIR" \
+        || warn "post_pipeline.py failed (non-fatal)."
+else
+    warn "REVEL file not found at $REVEL_FILE — skipping post-pipeline."
+    warn "Download REVEL v1.3 to enable REVEL annotation, Excel export, and HTML report."
+fi
+
+# =============================================================================
+# STEP 8: MUTECT2 POST-FILTER RESCUE (optional)
 # =============================================================================
 
 if $DO_RESCUE; then

@@ -25,6 +25,7 @@ import importlib.util
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pandas as pd
 import polars as pl
@@ -87,27 +88,34 @@ def annotate_revel(wl: pd.DataFrame, revel_path: str) -> pd.DataFrame:
 # =============================================================================
 
 def restructure_columns(df: pd.DataFrame) -> pd.DataFrame:
-    def split_hgvsc(val):
-        if not isinstance(val, str) or val in ('', '.'):
-            return '', ''
-        if ':' in val:
-            parts = val.split(':', 1)
-            return parts[0].strip(), parts[1].strip()
-        if val.startswith('c.'):
-            return '', val.strip()
-        return '', val.strip()
+    # Only split hgvsc into transcript_id if post_process_whitelist.py
+    # hasn't already populated transcript_id
+    has_transcript = (
+        'transcript_id' in df.columns
+        and df['transcript_id'].fillna('').ne('').any()
+    )
 
-    splits = df['hgvsc'].fillna('').apply(split_hgvsc)
-    df['transcript_id'] = splits.apply(lambda x: x[0])
-    df['hgvsc']         = splits.apply(lambda x: x[1])
-    df = df.drop(columns=['hgvsp'], errors='ignore')
+    if not has_transcript:
+        def split_hgvsc(val):
+            if not isinstance(val, str) or val in ('', '.'):
+                return '', ''
+            if ':' in val:
+                parts = val.split(':', 1)
+                return parts[0].strip(), parts[1].strip()
+            if val.startswith('c.'):
+                return '', val.strip()
+            return '', val.strip()
+
+        splits = df['hgvsc'].fillna('').apply(split_hgvsc)
+        df['transcript_id'] = splits.apply(lambda x: x[0])
+        df['hgvsc']         = splits.apply(lambda x: x[1])
 
     cols = [
         'chrom', 'pos', 'ref', 'alt', 'gene',
-        'transcript_id', 'hgvsc', 'protein_change', 'consequence',
+        'transcript_id', 'hgvsc', 'hgvsp', 'protein_change', 'consequence',
         'n_cancer_types', 'cancer_types', 'n_samples', 'sources',
         'oncokb_oncogenicity', 'clinvar_clinical_significance',
-        'wl_tier', 'genome_version', 'revel_score',
+        'tp53_class', 'wl_tier', 'genome_version', 'revel_score',
     ]
     extra = [c for c in df.columns if c not in cols]
     df = df[[c for c in cols if c in df.columns] + extra]
@@ -139,7 +147,8 @@ def compute_summary(df: pd.DataFrame, label: str) -> dict:
     csq_counts    = df['consequence'].value_counts().to_dict()
     oncokb_present = df['oncokb_oncogenicity'].fillna('').ne('').sum()
     revel_present  = df['revel_score'].fillna('').astype(str).ne('').sum()
-    clinvar_only   = ((df['n_samples'].fillna(0) == 0) &
+    n_samp = pd.to_numeric(df['n_samples'], errors='coerce').fillna(0)
+    clinvar_only   = ((n_samp == 0) &
                       (df['sources'].fillna('') == 'ClinVar')).sum()
     return {
         'label':         label,
@@ -203,7 +212,7 @@ def write_summary_sheet(wb, stats_full: dict, stats_hc: dict, run_date: str):
 
     ws.merge_cells('A1:C1')
     c = ws['A1']
-    c.value     = 'ONCOSIEVE — Pan-Cancer Variant Whitelist'
+    c.value     = 'ONCOSIEVE v1.0 — Pan-Cancer Variant Whitelist'
     c.font      = Font(bold=True, size=14, color='1F4E79')
     c.alignment = Alignment(horizontal='left', vertical='center')
 
@@ -287,7 +296,7 @@ def write_data_sheet(wb, df: pd.DataFrame, sheet_name: str):
         'transcript_id': 22, 'hgvsc': 20, 'protein_change': 18,
         'consequence': 16, 'n_cancer_types': 10, 'cancer_types': 35,
         'n_samples': 10, 'sources': 30, 'oncokb_oncogenicity': 22,
-        'clinvar_clinical_significance': 28, 'wl_tier': 8,
+        'clinvar_clinical_significance': 28, 'tp53_class': 16, 'wl_tier': 8,
         'genome_version': 12, 'revel_score': 10,
     }
 
@@ -303,34 +312,44 @@ def write_data_sheet(wb, df: pd.DataFrame, sheet_name: str):
 
     csq_col = cols.index('consequence') + 1 if 'consequence' in cols else None
 
-    for r_idx, row in enumerate(df.itertuples(index=False), 2):
-        tier = str(getattr(row, 'wl_tier', ''))
-        csq  = str(getattr(row, 'consequence', ''))
-        row_fill = None
-        if tier in TIER_COLORS:
-            row_fill = PatternFill('solid', fgColor=TIER_COLORS[tier])
+    # Pre-build shared style objects to avoid per-cell construction
+    data_font = Font(size=9)
+    data_align = Alignment(horizontal='left', vertical='center')
+    tier_fills = {t: PatternFill('solid', fgColor=c) for t, c in TIER_COLORS.items()}
+    csq_fills = {c: PatternFill('solid', fgColor=v) for c, v in CSQ_COLORS.items()}
 
-        for c_idx, col in enumerate(cols, 1):
-            raw = getattr(row, col, '')
-            # Use native numeric type if available
-            if isinstance(raw, float) and raw != raw:
-                val = None
-            elif raw is None or raw == 'nan':
-                val = None
+    # Determine column indices for tier/consequence lookups
+    tier_col_idx = cols.index('wl_tier') if 'wl_tier' in cols else None
+    csq_col_idx = cols.index('consequence') if 'consequence' in cols else None
+
+    # Batch insert data rows using ws.append (much faster than cell-by-cell)
+    for row_vals in df.itertuples(index=False):
+        clean = []
+        for v in row_vals:
+            if isinstance(v, float) and v != v:
+                clean.append(None)
+            elif v is None or v == 'nan':
+                clean.append(None)
             else:
-                val = raw
+                clean.append(v)
+        ws.append(clean)
 
-            if c_idx == csq_col and csq in CSQ_COLORS:
-                cell_fill = PatternFill('solid', fgColor=CSQ_COLORS[csq])
-            else:
-                cell_fill = row_fill
+    # Apply formatting in a second pass (column-oriented where possible)
+    n_cols = len(cols)
+    for r_idx in range(2, len(df) + 2):
+        tier = str(ws.cell(row=r_idx, column=tier_col_idx + 1).value) if tier_col_idx is not None else ''
+        csq = str(ws.cell(row=r_idx, column=csq_col_idx + 1).value) if csq_col_idx is not None else ''
+        row_fill = tier_fills.get(tier)
 
-            c = ws.cell(row=r_idx, column=c_idx, value=val)
-            c.font      = Font(size=9)
-            c.alignment = Alignment(horizontal='left', vertical='center')
-            c.border    = THIN_BORDER
-            if cell_fill:
-                c.fill = cell_fill
+        for c_idx in range(1, n_cols + 1):
+            c = ws.cell(row=r_idx, column=c_idx)
+            c.font = data_font
+            c.alignment = data_align
+            c.border = THIN_BORDER
+            if csq_col is not None and c_idx == csq_col and csq in csq_fills:
+                c.fill = csq_fills[csq]
+            elif row_fill:
+                c.fill = row_fill
 
         ws.row_dimensions[r_idx].height = 13
 
@@ -359,24 +378,25 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
     run_date = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
 
-    print('\n[1/5] Loading whitelist...')
+    print('\n[1/6] Loading whitelist...')
     wl = pd.read_csv(args.whitelist, sep='\t', dtype=str, low_memory=False)
     print(f'  {len(wl)} variants, {len(wl.columns)} columns')
 
-    print('\n[2/5] Annotating with REVEL scores...')
+    print('\n[2/6] Annotating with REVEL scores...')
     wl = annotate_revel(wl, args.revel)
 
-    print('\n[3/5] Restructuring columns...')
+    print('\n[3/6] Restructuring columns...')
     wl = restructure_columns(wl)
     wl = coerce_numerics(wl)
     print(f'  Final columns: {list(wl.columns)}')
 
     full_tsv = os.path.join(args.out_dir,
                             'pan_cancer_whitelist_GRCh38_full.tsv.gz')
-    wl.to_csv(full_tsv, sep='\t', index=False)
+    wl.to_csv(full_tsv, sep='\t', index=False,
+              compression='gzip' if full_tsv.endswith('.gz') else None)
     print(f'  Full TSV: {full_tsv}')
 
-    print('\n[4/5] Generating high-confidence whitelist...')
+    print('\n[4/6] Generating high-confidence whitelist...')
     clinvar_only_mask = (
         (wl['n_samples'].fillna(0) == 0) &
         (wl['sources'].fillna('') == 'ClinVar')
@@ -387,7 +407,8 @@ def main():
 
     hc_tsv = os.path.join(args.out_dir,
                           'pan_cancer_whitelist_GRCh38_highconf.tsv.gz')
-    wl_hc.to_csv(hc_tsv, sep='\t', index=False)
+    wl_hc.to_csv(hc_tsv, sep='\t', index=False,
+                 compression='gzip' if hc_tsv.endswith('.gz') else None)
     print(f'  High-confidence TSV: {hc_tsv}')
 
     hc_vcf = os.path.join(args.out_dir,
@@ -404,7 +425,7 @@ def main():
     else:
         print(f'  High-confidence VCF: {hc_vcf}')
 
-    print('\n[5/5] Exporting Excel files...')
+    print('\n[5/6] Exporting Excel files...')
     stats_full = compute_summary(wl,    'Full whitelist')
     stats_hc   = compute_summary(wl_hc, 'High-confidence')
 
@@ -454,7 +475,7 @@ def main():
         gr.build_report(
             wl,
             wl_hc,
-            __import__('pathlib').Path(report_path),
+            Path(report_path),
             logo_path=logo_path,
         )
 

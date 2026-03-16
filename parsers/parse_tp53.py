@@ -21,7 +21,6 @@ Key column usage:
   - Position  : g_description_GRCh38 (e.g. g.7675184A>G)
   - REF/ALT   : parsed from g_description_GRCh38
   - Consequence: Effect (case-insensitive)
-  - Filter    : DNE_LOFclass != 'NA' (excludes variants with no functional evidence)
   - Cancer type: Morphology (histological diagnosis)
   - HGVSc     : c_description
   - HGVSp     : ProtDescription
@@ -45,8 +44,75 @@ from parsers.common import (
 
 log = setup_logger('TP53')
 
-# Regex to parse g_description_GRCh38: e.g. "g.7674220C>T"
+# Regex to parse g_description_GRCh38
+# SNV:    g.7674220C>T
 _GDESC_SNV_RE = re.compile(r'g\.(\d+)([ACGTacgt])>([ACGTacgt])')
+# Deletion with bases: g.7674220_7674225delACGTAC  or  g.7674220delC
+_GDESC_DEL_RE = re.compile(r'g\.(\d+)(?:_\d+)?del([ACGTacgt]+)', re.IGNORECASE)
+# Insertion: g.7674220_7674221insACG
+_GDESC_INS_RE = re.compile(r'g\.(\d+)_\d+ins([ACGTacgt]+)', re.IGNORECASE)
+# Delins with bases: g.7674220_7674225delACGTACinsT  or  g.7674220delCinsT
+_GDESC_DELINS_RE = re.compile(r'g\.(\d+)(?:_\d+)?del([ACGTacgt]+)ins([ACGTacgt]+)', re.IGNORECASE)
+# Duplication: g.7674220_7674222dup  or  g.7674220_7674222dupACG
+_GDESC_DUP_RE = re.compile(r'g\.(\d+)(?:_\d+)?dup([ACGTacgt]*)', re.IGNORECASE)
+
+
+def _parse_gdesc(gdesc: str):
+    """
+    Parse g_description_GRCh38 into (pos, ref, alt) in VCF-style coordinates.
+    Returns (pos, ref, alt) or None if unparseable.
+
+    Handles: SNV, deletion (with explicit bases), insertion, delins, duplication.
+    Deletions/insertions without explicit bases cannot be resolved without a
+    reference FASTA and return None.
+    """
+    gdesc = gdesc.strip()
+
+    # Try delins first (before plain del, since delins contains 'del')
+    m = _GDESC_DELINS_RE.search(gdesc)
+    if m:
+        pos = int(m.group(1))
+        ref = m.group(2).upper()
+        alt = m.group(3).upper()
+        return pos, ref, alt
+
+    # SNV: g.NNNNref>alt
+    m = _GDESC_SNV_RE.search(gdesc)
+    if m:
+        return int(m.group(1)), m.group(2).upper(), m.group(3).upper()
+
+    # Deletion with explicit bases: g.NNNNdelBASES
+    m = _GDESC_DEL_RE.search(gdesc)
+    if m:
+        pos = int(m.group(1))
+        deleted = m.group(2).upper()
+        # VCF-style: need the preceding base, but we don't have FASTA.
+        # Use first base of deleted sequence as anchor (approximate; pos stays same).
+        # ref = deleted, alt = first base of deleted (the anchor)
+        # This is an approximation — VCF convention is pos-1 anchor, but without
+        # FASTA we use the first deleted base as anchor.
+        ref = deleted
+        alt = deleted[0]  # keep first base, delete rest
+        return pos, ref, alt
+
+    # Insertion: g.NNNN_NNNN+1insBASES
+    m = _GDESC_INS_RE.search(gdesc)
+    if m:
+        pos = int(m.group(1))
+        inserted = m.group(2).upper()
+        # VCF-style: ref = base at pos, alt = base + inserted
+        # Without FASTA, use 'N' as placeholder anchor
+        return pos, 'N', 'N' + inserted
+
+    # Duplication with explicit bases: g.NNNNdupBASES
+    m = _GDESC_DUP_RE.search(gdesc)
+    if m and m.group(2):
+        pos = int(m.group(1))
+        duped = m.group(2).upper()
+        # Dup is equivalent to an insertion of the duplicated bases
+        return pos, duped[0], duped[0] + duped
+
+    return None
 
 # Consequence mapping — case-insensitive lookup applied at parse time
 _TP53_CONSEQUENCE_MAP = {
@@ -66,8 +132,9 @@ _TP53_CONSEQUENCE_MAP = {
     '':           'unknown',
 }
 
-# DNE_LOFclass values to include (exclude 'NA')
-_DNE_LOF_INCLUDE = {'DNE_LOF', 'DNE', 'LOF'}
+# DNE_LOFclass — retained as metadata but no longer used as a filter.
+# The TP53 database is comprehensive; gating on functional class dropped 45% of
+# variants and caused TP53-gene entries from other sources to lack TP53 attribution.
 
 
 def parse_tp53(somatic_tsv: str,
@@ -126,29 +193,19 @@ def _parse_tp53_tsv(path: str, source_label: str) -> pd.DataFrame | None:
         log.error('TP53: g_description_GRCh38 column not found — cannot parse positions')
         return None
 
-    n_skipped_dnelof = 0
     n_skipped_pos    = 0
     rows = []
 
     for _, row in df_raw.iterrows():
         try:
-            # --- DNE_LOFclass filter ---
-            if dnelof_col:
-                dnelof = str(row[dnelof_col]).strip()
-                if dnelof not in _DNE_LOF_INCLUDE:
-                    n_skipped_dnelof += 1
-                    continue
-
             # --- Position and alleles from g_description_GRCh38 ---
             gdesc = str(row[pos_col]).strip()
-            m = _GDESC_SNV_RE.search(gdesc)
-            if not m:
+            parsed = _parse_gdesc(gdesc)
+            if parsed is None:
                 n_skipped_pos += 1
                 continue
 
-            pos = int(m.group(1))
-            ref = m.group(2).upper()
-            alt = m.group(3).upper()
+            pos, ref, alt = parsed
 
             if not is_valid_allele(ref) or not is_valid_allele(alt):
                 continue
@@ -177,6 +234,9 @@ def _parse_tp53_tsv(path: str, source_label: str) -> pd.DataFrame | None:
             hgvsc = str(row[hgvsc_col]).strip() if hgvsc_col else ''
             hgvsp = str(row[hgvsp_col]).strip() if hgvsp_col else ''
 
+            # --- DNE_LOFclass (metadata, not a filter) ---
+            dnelof = str(row[dnelof_col]).strip() if dnelof_col else ''
+
             rows.append({
                 'chrom':       chrom,
                 'pos':         pos,
@@ -189,20 +249,21 @@ def _parse_tp53_tsv(path: str, source_label: str) -> pd.DataFrame | None:
                 'cancer_type': cancer_type,
                 'n_samples':   n_samples,
                 'source':      source_label,
+                'tp53_class':  dnelof,
             })
         except (ValueError, TypeError, KeyError):
             continue
 
     log.info(
-        'TP53 (%s): %d rows kept | %d excluded by DNE_LOFclass | %d excluded by unparseable position',
-        source_label, len(rows), n_skipped_dnelof, n_skipped_pos
+        'TP53 (%s): %d rows kept | %d excluded by unparseable position',
+        source_label, len(rows), n_skipped_pos
     )
 
     if not rows:
         log.warning('TP53: no rows produced from %s', path)
         return None
 
-    df = pd.DataFrame(rows, columns=STANDARD_COLS)
+    df = pd.DataFrame(rows, columns=STANDARD_COLS + ['tp53_class'])
     return df
 
 
