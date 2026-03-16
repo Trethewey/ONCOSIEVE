@@ -30,11 +30,132 @@ from parsers.common import INCLUDED_CONSEQUENCES, STANDARD_COLS, setup_logger
 
 log = setup_logger('build_whitelist')
 
+
+# ── MANE Select lookup ──────────────────────────────────────────────────────
+
+def load_mane_lookup(mane_path: str = 'data/reference/mane_select.tsv.gz') -> dict:
+    """
+    Build a lookup from the MANE Select reference file.
+    Returns {ENST_base: (refseq_nuc, ensp_full, mane_status, gene)} where
+    ENST_base is the version-stripped Ensembl transcript (e.g. 'ENST00000381652').
+    """
+    import gzip, re
+    lookup = {}
+    opener = gzip.open if mane_path.endswith('.gz') else open
+    with opener(mane_path, 'rt') as fh:
+        header = fh.readline().rstrip('\n').split('\t')
+        ci = {c.lstrip('#'): i for i, c in enumerate(header)}
+        for line in fh:
+            cols = line.rstrip('\n').split('\t')
+            enst_full = cols[ci['Ensembl_nuc']]     # e.g. ENST00000381652.4
+            refseq    = cols[ci['RefSeq_nuc']]       # e.g. NM_004972.4
+            ensp_full = cols[ci['Ensembl_prot']]     # e.g. ENSP00000371067.4
+            status    = cols[ci['MANE_status']]       # MANE Select or MANE Plus Clinical
+            gene      = cols[ci['symbol']]
+            m = re.match(r'(ENST\d+)', enst_full)
+            if m:
+                enst_base = m.group(1)
+                lookup[enst_base] = (refseq, ensp_full, status, gene)
+    log.info('Loaded MANE lookup: %d transcripts (%s)',
+             len(lookup), mane_path)
+    return lookup
+
+
+def load_ensembl_xref(xref_path: str = 'data/reference/ensembl_transcript_xref.tsv') -> dict:
+    """
+    Load supplementary Ensembl transcript cross-references for non-MANE
+    transcripts. Returns {ENST_base: (refseq_nuc, ensp_id)}.
+    """
+    lookup = {}
+    if not os.path.exists(xref_path):
+        return lookup
+    with open(xref_path, 'rt') as fh:
+        fh.readline()  # skip header
+        for line in fh:
+            cols = line.rstrip('\n').split('\t')
+            if len(cols) >= 3:
+                enst, ensp, refseq = cols[0], cols[1], cols[2]
+                if enst:
+                    lookup[enst] = (refseq, ensp)
+    log.info('Loaded Ensembl xref: %d transcripts (%s)',
+             len(lookup), xref_path)
+    return lookup
+
+
+def apply_mane_lookup(df: pd.DataFrame, mane_lookup: dict,
+                      ensembl_xref: dict | None = None) -> pd.DataFrame:
+    """
+    Using the MANE lookup (and optional Ensembl xref fallback), set:
+      - is_mane_select: True if the transcript is MANE Select
+      - refseq_id: NM_ accession from MANE or Ensembl xref
+      - hgvsp: prepend ENSP accession if bare p. notation
+    """
+    import re
+    _RE_ENST = re.compile(r'(ENST\d+)')
+    _RE_ENSP = re.compile(r'ENSP\d+')
+    xref = ensembl_xref or {}
+
+    def _enrich_row(hgvsc, hgvsp):
+        refseq_id = ''
+        is_mane = False
+        ensp_prefix = ''
+
+        if isinstance(hgvsc, str) and hgvsc:
+            m = _RE_ENST.search(hgvsc)
+            if m:
+                enst_base = m.group(1)
+                info = mane_lookup.get(enst_base)
+                if info:
+                    refseq_id, ensp_full, status, _ = info
+                    is_mane = (status == 'MANE Select')
+                    ensp_prefix = ensp_full
+                elif enst_base in xref:
+                    # Fallback to Ensembl xref for non-MANE transcripts
+                    refseq_id, ensp_id = xref[enst_base]
+                    ensp_prefix = ensp_id  # no version in xref
+
+        # Prepend ENSP to bare p. hgvsp if we have a mapping
+        new_hgvsp = hgvsp
+        if (ensp_prefix and isinstance(hgvsp, str) and hgvsp
+                and hgvsp not in ('', 'nan')
+                and not _RE_ENSP.search(hgvsp)):
+            new_hgvsp = f'{ensp_prefix}:{hgvsp}'
+
+        return refseq_id, is_mane, new_hgvsp
+
+    results = df.apply(
+        lambda r: _enrich_row(
+            r.get('hgvsc', ''),
+            r.get('hgvsp', '')),
+        axis=1, result_type='expand')
+    df['refseq_id'] = results[0]
+    df['is_mane_select'] = results[1]
+    df['hgvsp'] = results[2]
+
+    n_mane = df['is_mane_select'].sum()
+    n_refseq = (df['refseq_id'] != '').sum()
+    n_ensp = df['hgvsp'].fillna('').str.contains('ENSP', na=False).sum()
+    log.info('MANE lookup: %d MANE Select, %d with RefSeq ID, %d with ENSP in hgvsp',
+             n_mane, n_refseq, n_ensp)
+    return df
+
 # Sources that contribute to the sample count threshold
 COUNT_SOURCES = {'COSMIC', 'TCGA', 'GENIE'}
 
 # Sources that are annotation/curated (not count-based)
 CURATED_SOURCES = {'OncoKB', 'ClinVar', 'CancerHotspots', 'TP53_somatic', 'TP53_germline'}
+
+# Priority order for hgvsc/transcript selection during aggregation
+# Lower number = higher priority
+TRANSCRIPT_SOURCE_PRIORITY = {
+    'CancerHotspots': 0,
+    'GENIE':          1,
+    'ClinVar':        2,
+    'COSMIC':         3,
+    'TCGA':           4,
+    'TP53_somatic':   5,
+    'TP53_germline':  5,
+}
 
 # VCF header template
 _VCF_HEADER = """\
@@ -546,7 +667,14 @@ def _aggregate_polars(df_coord: pd.DataFrame) -> pd.DataFrame:
         if c in df_coord.columns:
             df_coord[c] = df_coord[c].fillna('').astype(str)
 
+    # Add source priority for deterministic hgvsc selection
+    df_coord['_src_priority'] = df_coord['source'].map(
+        TRANSCRIPT_SOURCE_PRIORITY).fillna(99).astype(int)
+
     lf = pl.from_pandas(df_coord).lazy()
+
+    # Sort by priority so first_nonempty picks the best source's transcript
+    lf = lf.sort(['chrom', 'pos', 'ref', 'alt', '_src_priority'])
 
     key_cols = ['chrom', 'pos', 'ref', 'alt']
 
@@ -613,6 +741,38 @@ def _aggregate_polars(df_coord: pd.DataFrame) -> pd.DataFrame:
         .alias('n_samples')
     )
 
+    # hgvsc/hgvsp: priority-aware selection (sort guarantees best source first)
+    _hgvsc_filter = (
+        pl.col('hgvsc').is_not_null() &
+        (pl.col('hgvsc').str.strip_chars() != '') &
+        (pl.col('hgvsc').str.to_lowercase() != 'nan')
+    )
+    hgvsc_expr = (
+        pl.col('hgvsc')
+        .filter(_hgvsc_filter)
+        .first()
+        .fill_null('')
+        .alias('hgvsc')
+    )
+    hgvsp_expr = (
+        pl.col('hgvsp')
+        .filter(
+            pl.col('hgvsp').is_not_null() &
+            (pl.col('hgvsp').str.strip_chars() != '') &
+            (pl.col('hgvsp').str.to_lowercase() != 'nan')
+        )
+        .first()
+        .fill_null('')
+        .alias('hgvsp')
+    )
+    # Source that provided the winning hgvsc
+    transcript_source_expr = (
+        pl.col('source')
+        .filter(_hgvsc_filter)
+        .first()
+        .fill_null('')
+        .alias('transcript_source')
+    )
     df_agg = (
         lf.group_by(key_cols)
         .agg([
@@ -622,8 +782,9 @@ def _aggregate_polars(df_coord: pd.DataFrame) -> pd.DataFrame:
             n_samples_expr,
             first_nonempty('gene'),
             first_nonempty('consequence'),
-            first_nonempty('hgvsc'),
-            first_nonempty('hgvsp'),
+            hgvsc_expr,
+            hgvsp_expr,
+            transcript_source_expr,
             first_nonempty('oncokb_oncogenicity'),
             first_nonempty('clinvar_clinical_significance'),
             first_nonempty('tp53_class'),
@@ -645,6 +806,12 @@ def _aggregate_pandas(df_coord: pd.DataFrame) -> pd.DataFrame:
         df_coord['oncokb_oncogenicity'] = ''
     if 'tp53_class' not in df_coord.columns:
         df_coord['tp53_class'] = ''
+
+    # Add source priority for deterministic hgvsc selection
+    df_coord['_src_priority'] = df_coord['source'].map(
+        TRANSCRIPT_SOURCE_PRIORITY).fillna(99).astype(int)
+    df_coord = df_coord.sort_values(
+        ['chrom', 'pos', 'ref', 'alt', '_src_priority'])
 
     def first_nonempty_agg(s):
         vals = s.dropna()
@@ -672,6 +839,14 @@ def _aggregate_pandas(df_coord: pd.DataFrame) -> pd.DataFrame:
     clinvar_sig_agg = df_coord.groupby(key_cols)['clinvar_clinical_significance'].agg(first_nonempty_agg)
     tp53_class_agg  = df_coord.groupby(key_cols)['tp53_class'].agg(first_nonempty_agg)
 
+    # transcript_source: which source provided the winning hgvsc
+    _hgvsc_valid = df_coord[
+        df_coord['hgvsc'].notna() &
+        (df_coord['hgvsc'].str.strip() != '') &
+        (~df_coord['hgvsc'].str.lower().isin(['nan', 'none', 'na']))
+    ]
+    transcript_source_agg = _hgvsc_valid.groupby(key_cols)['source'].first()
+
     df_agg = pd.DataFrame({
         'sources':                       sources_agg,
         'cancer_types':                  cancer_type_agg,
@@ -681,6 +856,7 @@ def _aggregate_pandas(df_coord: pd.DataFrame) -> pd.DataFrame:
         'consequence':                   consequence_agg,
         'hgvsc':                         hgvsc_agg,
         'hgvsp':                         hgvsp_agg,
+        'transcript_source':             transcript_source_agg,
         'oncokb_oncogenicity':           oncokb_agg,
         'clinvar_clinical_significance': clinvar_sig_agg,
         'tp53_class':                    tp53_class_agg,
@@ -777,6 +953,7 @@ def write_tsv(df: pd.DataFrame, path: str) -> None:
         'chrom', 'pos', 'ref', 'alt', 'gene', 'hgvsc', 'hgvsp',
         'consequence', 'n_cancer_types', 'cancer_types', 'n_samples',
         'sources', 'oncokb_oncogenicity', 'clinvar_clinical_significance',
+        'transcript_source', 'is_mane_select', 'refseq_id',
         'tp53_class', 'wl_tier',
     ]
     df_out = df[out_cols].sort_values(['chrom', 'pos'])
@@ -1089,6 +1266,22 @@ def main():
     # Merge and aggregate
     included_csq = set(cfg.get('included_consequences', list(INCLUDED_CONSEQUENCES)))
     df_merged = merge_and_aggregate(frames, included_csq)
+
+    # MANE Select lookup — set is_mane_select and refseq_id from reference
+    mane_path = os.path.join(
+        cfg.get('data_dir', ''), 'data', 'reference', 'mane_select.tsv.gz')
+    if not os.path.exists(mane_path):
+        mane_path = 'data/reference/mane_select.tsv.gz'
+    if os.path.exists(mane_path):
+        mane_lookup = load_mane_lookup(mane_path)
+        xref_path = os.path.join(os.path.dirname(mane_path),
+                                 'ensembl_transcript_xref.tsv')
+        ensembl_xref = load_ensembl_xref(xref_path)
+        df_merged = apply_mane_lookup(df_merged, mane_lookup, ensembl_xref)
+    else:
+        log.warning('MANE reference not found at %s — skipping MANE lookup', mane_path)
+        df_merged['is_mane_select'] = False
+        df_merged['refseq_id'] = ''
 
     # Apply filters
     df_filtered = apply_filters(df_merged, cfg)

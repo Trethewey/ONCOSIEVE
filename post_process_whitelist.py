@@ -222,6 +222,7 @@ def main():
 
     new_cols = ['genome_version', 'transcript_id', 'protein_change']
     n_total = n_grch37 = n_no_transcript = n_no_protein = n_unparsed = 0
+    n_mane = 0
     unparsed_examples: list = []
 
     with _open_r(args.whitelist) as fh_in, _open_w(args.out) as fh_out:
@@ -244,6 +245,7 @@ def main():
             sources = row[col_i.get('sources', -1)] if 'sources' in col_i else ''
             hgvsc   = row[col_i.get('hgvsc',   -1)] if 'hgvsc'   in col_i else ''
             hgvsp   = row[col_i.get('hgvsp',   -1)] if 'hgvsp'   in col_i else ''
+            is_mane = row[col_i.get('is_mane_select', -1)] if 'is_mane_select' in col_i else ''
 
             genome_version = assign_genome_version(sources, grch37_set)
             transcript_id  = extract_transcript_id(hgvsc)
@@ -256,6 +258,8 @@ def main():
                 n_no_transcript += 1
             if not protein_change:
                 n_no_protein += 1
+            if is_mane and str(is_mane).lower() in ('true', '1'):
+                n_mane += 1
             # Flag if input hgvsp was present but normalisation left a
             # non-standard string (no 'p.' prefix after normalisation)
             if (hgvsp and hgvsp not in {'.', '-', 'NA', 'nan', ''}
@@ -275,6 +279,7 @@ def main():
     print(f'  With transcript ID:   {n_total - n_no_transcript:,}')
     print(f'  Without transcript:   {n_no_transcript:,}  '
           '(OncoKB/ClinVar concept-level variants expected here)')
+    print(f'  MANE Select:          {n_mane:,}')
     print(f'  With protein change:  {n_total - n_no_protein:,}')
     print(f'  No protein change:    {n_no_protein:,}  '
           '(splice/intronic/noncoding rows expected)')

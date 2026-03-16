@@ -88,34 +88,38 @@ def annotate_revel(wl: pd.DataFrame, revel_path: str) -> pd.DataFrame:
 # =============================================================================
 
 def restructure_columns(df: pd.DataFrame) -> pd.DataFrame:
-    # Only split hgvsc into transcript_id if post_process_whitelist.py
-    # hasn't already populated transcript_id
-    has_transcript = (
-        'transcript_id' in df.columns
-        and df['transcript_id'].fillna('').ne('').any()
-    )
+    # Extract transcript_id from full hgvsc (e.g. ENST00000288602.6:c.1799T>A)
+    # but keep hgvsc as the FULL format (do not strip the transcript prefix)
+    import re
+    _RE_ENST = re.compile(r'(ENST\d+)', re.I)
+    _RE_NM   = re.compile(r'^(N[MRP]_\d+)', re.I)
 
-    if not has_transcript:
-        def split_hgvsc(val):
-            if not isinstance(val, str) or val in ('', '.'):
-                return '', ''
-            if ':' in val:
-                parts = val.split(':', 1)
-                return parts[0].strip(), parts[1].strip()
-            if val.startswith('c.'):
-                return '', val.strip()
-            return '', val.strip()
+    def extract_tid(val):
+        if not isinstance(val, str) or val in ('', '.'):
+            return ''
+        m = _RE_ENST.search(val)
+        if m:
+            return m.group(1).upper()
+        m = _RE_NM.match(val)
+        if m:
+            return m.group(1).upper()
+        return ''
 
-        splits = df['hgvsc'].fillna('').apply(split_hgvsc)
-        df['transcript_id'] = splits.apply(lambda x: x[0])
-        df['hgvsc']         = splits.apply(lambda x: x[1])
+    # Fill transcript_id from hgvsc only where not already populated
+    if 'transcript_id' not in df.columns:
+        df['transcript_id'] = df['hgvsc'].fillna('').apply(extract_tid)
+    else:
+        missing = df['transcript_id'].fillna('').eq('')
+        df.loc[missing, 'transcript_id'] = df.loc[missing, 'hgvsc'].fillna('').apply(extract_tid)
 
     cols = [
         'chrom', 'pos', 'ref', 'alt', 'gene',
-        'transcript_id', 'hgvsc', 'hgvsp', 'protein_change', 'consequence',
+        'transcript_id', 'is_mane_select', 'refseq_id',
+        'hgvsc', 'hgvsp', 'protein_change', 'consequence',
         'n_cancer_types', 'cancer_types', 'n_samples', 'sources',
         'oncokb_oncogenicity', 'clinvar_clinical_significance',
-        'tp53_class', 'wl_tier', 'genome_version', 'revel_score',
+        'transcript_source', 'tp53_class', 'wl_tier',
+        'genome_version', 'revel_score',
     ]
     extra = [c for c in df.columns if c not in cols]
     df = df[[c for c in cols if c in df.columns] + extra]
@@ -293,10 +297,12 @@ def write_data_sheet(wb, df: pd.DataFrame, sheet_name: str):
 
     col_widths = {
         'chrom': 8, 'pos': 12, 'ref': 6, 'alt': 6, 'gene': 10,
-        'transcript_id': 22, 'hgvsc': 20, 'protein_change': 18,
+        'transcript_id': 22, 'is_mane_select': 14, 'refseq_id': 18, 'hgvsc': 32,
+        'hgvsp': 28, 'protein_change': 18,
         'consequence': 16, 'n_cancer_types': 10, 'cancer_types': 35,
         'n_samples': 10, 'sources': 30, 'oncokb_oncogenicity': 22,
-        'clinvar_clinical_significance': 28, 'tp53_class': 16, 'wl_tier': 8,
+        'clinvar_clinical_significance': 28, 'transcript_source': 16,
+        'tp53_class': 16, 'wl_tier': 8,
         'genome_version': 12, 'revel_score': 10,
     }
 

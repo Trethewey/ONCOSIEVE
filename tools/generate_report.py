@@ -323,10 +323,11 @@ def chart_top_genes(df_hc, top_n=100):
 # ── Variant DataTable ──────────────────────────────────────────────────────────
 
 DISPLAY_COLS = [
-    "chrom", "pos", "ref", "alt", "gene", "transcript_id",
-    "hgvsc", "protein_change", "consequence", "wl_tier",
+    "chrom", "pos", "ref", "alt", "gene", "transcript_id", "is_mane_select",
+    "refseq_id", "hgvsc", "hgvsp", "protein_change", "consequence", "wl_tier",
     "n_samples", "n_cancer_types", "sources",
-    "oncokb_oncogenicity", "clinvar_clinical_significance", "tp53_class", "revel_score",
+    "oncokb_oncogenicity", "clinvar_clinical_significance",
+    "transcript_source", "tp53_class", "revel_score",
 ]
 
 _TIER_COL_IDX  = DISPLAY_COLS.index("wl_tier")

@@ -359,20 +359,23 @@ python3 mutect2_rescue.py \
 | 3 | ref | str | Reference allele |
 | 4 | alt | str | Alternate allele |
 | 5 | gene | str | HGNC gene symbol |
-| 6 | transcript_id | str | Ensembl transcript accession with version (e.g. ENST00000616125.4) |
-| 7 | hgvsc | str | HGVSc notation (c.* only, e.g. c.703T>C) |
-| 8 | protein_change | str | Normalised protein change in 3-letter HGVS format (e.g. p.Trp235Arg) |
-| 9 | consequence | str | Standardised consequence term |
-| 10 | n_cancer_types | int | Number of distinct cancer types |
-| 11 | cancer_types | str | Pipe-delimited cancer type labels |
-| 12 | n_samples | int | Total samples across count-based sources (0 for ClinVar/OncoKB) |
-| 13 | sources | str | Pipe-delimited contributing source databases |
-| 14 | oncokb_oncogenicity | str | OncoKB oncogenicity classification |
-| 15 | clinvar_clinical_significance | str | ClinVar clinical significance |
-| 16 | tp53_class | str | TP53 functional classification (DNE_LOF, notDNE_LOF, notDNE_notLOF, unclass.) |
-| 17 | wl_tier | int | Whitelist tier (1=highest confidence, 2=good evidence, 3=count-based below Tier 2) |
-| 18 | genome_version | str | Genome build (GRCh38) |
-| 19 | revel_score | float | REVEL pathogenicity score (missense only; 0-1) |
+| 6 | transcript_id | str | Ensembl transcript accession (e.g. ENST00000256078) |
+| 7 | is_mane_select | bool | True if transcript is MANE Select (source = CancerHotspots) |
+| 8 | hgvsc | str | Full HGVSc notation including transcript (e.g. ENST00000256078.4:c.35G>A) |
+| 9 | hgvsp | str | Full HGVSp notation (e.g. ENSP00000256078.4:p.Gly12Asp) |
+| 10 | protein_change | str | Normalised protein change in 3-letter HGVS format (e.g. p.Gly12Asp) |
+| 11 | consequence | str | Standardised consequence term |
+| 12 | n_cancer_types | int | Number of distinct cancer types |
+| 13 | cancer_types | str | Pipe-delimited cancer type labels |
+| 14 | n_samples | int | Total samples across count-based sources (0 for ClinVar/OncoKB) |
+| 15 | sources | str | Pipe-delimited contributing source databases |
+| 16 | oncokb_oncogenicity | str | OncoKB oncogenicity classification |
+| 17 | clinvar_clinical_significance | str | ClinVar clinical significance |
+| 18 | transcript_source | str | Database that provided the hgvsc/transcript (CancerHotspots, GENIE, ClinVar, COSMIC, TCGA, or empty) |
+| 19 | tp53_class | str | TP53 functional classification (DNE_LOF, notDNE_LOF, notDNE_notLOF, unclass.) |
+| 20 | wl_tier | int | Whitelist tier (1=highest confidence, 2=good evidence, 3=count-based below Tier 2) |
+| 21 | genome_version | str | Genome build (GRCh38) |
+| 22 | revel_score | float | REVEL pathogenicity score (missense only; 0-1) |
 
 ---
 
