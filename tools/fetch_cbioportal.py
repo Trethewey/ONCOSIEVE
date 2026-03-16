@@ -320,7 +320,7 @@ def fetch(api_base: str,
     log.info('')
     log.info('To use this snapshot in the pipeline:')
     log.info('  cp %s intermediate/cbioportal.tsv.gz', output_path)
-    log.info('  bash run_pipeline.sh --from-intermediates')
+    log.info('  bash run_oncosieve.sh --from-intermediates')
 
 
 def main():

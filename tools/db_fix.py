@@ -648,7 +648,7 @@ def main():
         "Verify config.yaml points to the lifted files before running the pipeline:",
         "  genie.maf : data/genie/data_mutations_extended_grch38_lifted.txt\n"
         "  tcga.maf  : data/TCGA/mc3.v0.2.8.PUBLIC.GRCh38.maf.gz\n\n"
-        "Then run: bash run_pipeline.sh",
+        "Then run: bash run_oncosieve.sh",
     )
 
     section("Summary")

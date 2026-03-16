@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# run_pipeline.sh
+# run_oncosieve.sh
 #
 # Orchestrates the full pan-cancer whitelist pipeline.
 #
@@ -15,12 +15,12 @@
 #   8. (Optional) Run Mutect2 post-filter rescue
 #
 # Usage:
-#   bash run_pipeline.sh [data_dir] [options]
+#   bash run_oncosieve.sh [data_dir] [options]
 #
 # Arguments:
 #   data_dir               Optional path to reference data directory.
 #                          Overrides relative data paths in config.yaml.
-#                          e.g. bash run_pipeline.sh /srv/data/reference/
+#                          e.g. bash run_oncosieve.sh /srv/data/reference/
 #
 # Options:
 #   --skip-sources STR     Comma-separated sources to skip, e.g. "genie,cbioportal"

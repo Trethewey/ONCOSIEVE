@@ -59,7 +59,7 @@ oncosieve/
 ├── post_process_whitelist.py   # Adds genome_version, transcript_id, protein_change columns
 ├── pre_check.py                # Pre-run dependency and data audit
 ├── test_pipeline.py            # Test harness
-├── run_pipeline.sh             # Orchestrator; run this to start the pipeline
+├── run_oncosieve.sh             # Orchestrator; run this to start the pipeline
 ├── config.yaml                 # File paths and source enable/disable flags
 ├── settings.yaml               # Thresholds and parameters (edit this)
 ├── requirements.txt
@@ -123,7 +123,7 @@ pip install -r requirements.txt
 
 ```bash
 # 1. Clone and install
-git clone <repo_url> && cd oncosieve.3.3
+git clone <repo_url> && cd oncosieve.1.0
 pip install -r requirements.txt
 
 # 2. Copy settings.yaml.example to settings.yaml and add your OncoKB token
@@ -153,7 +153,7 @@ tabix -p vcf -C data/clinvar/clinvar.vcf.gz
 python3 pre_check.py
 
 # 9. Run the full pipeline
-bash run_pipeline.sh
+bash run_oncosieve.sh
 ```
 
 ### Expected data directory layout
@@ -286,25 +286,25 @@ The extracted file `revel_with_transcript_ids` (~82 million rows, ~6 GB uncompre
 ### 1. Build the whitelist
 
 ```bash
-bash run_pipeline.sh
+bash run_oncosieve.sh
 ```
 
 Optional flags:
 
 ```bash
 # Skip parsers; re-run merge/filter/output from saved intermediates
-bash run_pipeline.sh --from-intermediates
+bash run_oncosieve.sh --from-intermediates
 
 # Run without OncoKB (no token required)
-bash run_pipeline.sh --skip-sources oncokb
+bash run_oncosieve.sh --skip-sources oncokb
 
 # Skip specific sources
-bash run_pipeline.sh --skip-sources cosmic,tcga
+bash run_oncosieve.sh --skip-sources cosmic,tcga
 ```
 
 ### 2. Post-pipeline processing
 
-Post-pipeline processing (REVEL annotation, high-confidence filtering, Excel export, HTML report) runs automatically as step 7 of `run_pipeline.sh` if the REVEL file is present at `data/REVEL/revel_with_transcript_ids`.
+Post-pipeline processing (REVEL annotation, high-confidence filtering, Excel export, HTML report) runs automatically as step 7 of `run_oncosieve.sh` if the REVEL file is present at `data/REVEL/revel_with_transcript_ids`.
 
 To run manually:
 
