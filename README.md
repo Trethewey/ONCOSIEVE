@@ -3,7 +3,7 @@
   <p><strong>Pan-Cancer Somatic Variant Whitelist Curation Tool</strong></p>
   <p><em>7 databases · 46.4 million variants</em></p>
   <p><em>1 curated whitelist</em></p>
-  <img src="https://github.com/user-attachments/assets/56304b21-8193-4e84-869a-347aadf7ab76" width="550"/>
+  <img src="assets/oncosieve-grid-redblue-text.svg" width="550" alt="ONCOSIEVE logo"/>
   <p>
     <strong>Author:</strong> Dr Christopher Trethewey<br>
     <strong>Email:</strong> christopher.trethewey@nhs.net
