@@ -142,7 +142,7 @@ pip install -r requirements.txt
 
 ```bash
 # 1. Clone and install
-git clone https://github.com/Trethewey/ONCOSIEVE.git && cd ONCOSIEVE
+git clone https://github.com/Trethewey/OncoSieve.git && cd OncoSieve
 pip install -r requirements.txt
 
 # 2. Copy settings.yaml.example to settings.yaml and add your OncoKB token
@@ -176,6 +176,8 @@ bash run_oncosieve.sh
 ```
 
 ### Expected data directory layout
+
+The `data/` directory is **not included in the repository** — it is gitignored because of size (~30 GB for full COSMIC + GENIE + TCGA + REVEL + PrimateAI-3D). Create it yourself and populate from the [data preparation](#data-preparation) section below.
 
 ```
 data/
@@ -420,7 +422,7 @@ python3 mutect2_rescue.py \
 
 Tier 3 contains variants that meet the base inclusion filter but fall below the Tier 2 count threshold. This includes TP53 database variants that pass on functional annotation rather than recurrence alone.
 
-PrimateAI-3D scores are annotated onto each variant but do not feed into tier assignment in v2; tiering remains driven by recurrence and curated evidence.
+PrimateAI-3D scores are annotated onto each variant but do not feed into tier assignment in v2; tiering remains driven by recurrence and curated evidence. PrimateAI-3D promotion of Tier 3 missense variants is implementable (the logic is sketched in `tools/annotate_primateai.py`) but is held back pending in-house validation against orthogonal pathogenicity calls — once benchmarked it can be enabled without re-running the rest of the pipeline.
 
 VAF floors are configurable in `settings.yaml` under `vaf_rescue`.
 
@@ -484,6 +486,12 @@ All three paths assume the `data/` directory is populated as described in [Data 
 OncoSieve is released under the [MIT License](LICENSE). The pipeline code is permissively licensed and you may copy, modify, and redistribute it freely.
 
 The underlying **data sources** are governed by their own licences (e.g. COSMIC requires a commercial-use licence, OncoKB requires an academic API token, Illumina PrimateAI-3D requires a data licence). You are responsible for complying with each source's terms separately.
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes per version.
 
 ---
 
