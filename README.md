@@ -1,5 +1,8 @@
 <div align="center">
   <img src="assets/oncosieve-grid-redblue-text.svg" width="550" alt="OncoSieve logo"/>
+
+  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
   <p><strong>Pan-Cancer Somatic Variant Whitelist Curation Tool</strong></p>
   <p><em>7 databases · 46.4 million variants</em></p>
   <p><em>1 curated whitelist</em></p>
