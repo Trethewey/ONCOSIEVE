@@ -74,7 +74,8 @@ def load_whitelist(wl_vcf: str) -> dict[tuple, dict]:
     vcf = pysam.VariantFile(wl_vcf, 'r')
     for rec in vcf.fetch():
         for alt in rec.alts or []:
-            key = (rec.chrom, rec.pos, rec.ref, alt)
+            chrom = rec.chrom.replace('chr', '')
+            key = (chrom, rec.pos, rec.ref, alt)
             wl[key] = {
                 'wl_tier':    rec.info.get('WL_TIER', '.'),
                 'wl_sources': rec.info.get('SOURCES', '.'),
@@ -202,7 +203,8 @@ def rescue(input_vcf: str,
 
         # Variant is filtered: check whitelist
         for alt in rec.alts or []:
-            key = (rec.chrom, rec.pos, rec.ref, alt)
+            chrom = rec.chrom.replace('chr', '')
+            key = (chrom, rec.pos, rec.ref, alt)
             wl_entry = wl.get(key)
 
             if wl_entry is None:

@@ -303,7 +303,7 @@ def _process_cosmic_chunk(chunk: list[list],
             if not ref or not alt:
                 continue
 
-            chrom = chrom_raw[3:] if chrom_raw.startswith('chr') else chrom_raw
+            chrom = normalise_chrom(chrom_raw)
             try:
                 pos = int(start_raw)
             except ValueError:

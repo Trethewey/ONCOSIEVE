@@ -1,0 +1,45 @@
+# =============================================================================
+# ONCOSIEVE v1.0 -- Conda Environment
+#
+# Create environment:
+#   conda env create -f packaging/environment.yml
+#
+# Activate:
+#   conda activate oncosieve
+#
+# Then run:
+#   bash run_oncosieve.sh
+#   -- or --
+#   make -f packaging/Makefile run
+# =============================================================================
+
+name: oncosieve
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+
+dependencies:
+  # Python runtime
+  - python>=3.10
+
+  # Bioinformatics tools (avoids manual compilation)
+  - bcftools>=1.17
+  - htslib>=1.17       # provides tabix
+  - samtools>=1.17
+
+  # Python packages
+  - pandas>=2.0
+  - pyyaml>=6.0
+  - requests>=2.31
+  - pysam>=0.21
+  - openpyxl>=3.1
+  - xlrd>=2.0
+  - polars>=0.20
+  - pyarrow>=14.0
+  - plotly>=5.0
+  - pyliftover>=0.4
+
+  # pip-only packages (if any)
+  - pip:
+    - []

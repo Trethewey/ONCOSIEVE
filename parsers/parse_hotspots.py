@@ -97,7 +97,7 @@ def parse_hotspots(tsv_path: str,
 
     # Consequence mapping
     if 'consequence' in df.columns:
-        df['consequence'] = df['consequence'].fillna('unknown').str.strip().map(CONSEQUENCE_MAP).fillna('other')
+        df['consequence'] = df['consequence'].fillna('unknown').str.strip().map(CONSEQUENCE_MAP).fillna('unknown')
     else:
         df['consequence'] = 'unknown'
 

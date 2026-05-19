@@ -143,7 +143,7 @@ def parse_genie(maf_path: str,
         df[col] = df[col].str.strip()
 
     # Map consequences vectorially
-    df['consequence'] = df['consequence'].str.strip().map(CONSEQUENCE_MAP).fillna('other')
+    df['consequence'] = df['consequence'].str.strip().map(CONSEQUENCE_MAP).fillna('unknown')
 
     # Cancer type from clinical lookup
     df['sample_id'] = df['sample_id'].str.strip()

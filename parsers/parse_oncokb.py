@@ -205,6 +205,11 @@ def _query_api(merged_df: pd.DataFrame, include_oncogenicity: list, api_token: s
                     wait = _RETRY_DELAY * (attempt + 2)
                     log.warning('OncoKB rate limited — waiting %.1fs', wait)
                     time.sleep(wait)
+                elif resp.status_code >= 500:
+                    wait = _RETRY_DELAY * (attempt + 1)
+                    log.warning('OncoKB batch %d: server error HTTP %d — retrying in %.1fs',
+                                batch_idx, resp.status_code, wait)
+                    time.sleep(wait)
                 else:
                     log.warning('OncoKB batch %d: HTTP %d — %s',
                                 batch_idx, resp.status_code, resp.text[:200])

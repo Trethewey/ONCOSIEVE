@@ -161,7 +161,7 @@ TRANSCRIPT_SOURCE_PRIORITY = {
 _VCF_HEADER = """\
 ##fileformat=VCFv4.2
 ##fileDate={date}
-##source=pan_cancer_whitelist_pipeline_v1.0
+##source=pan_cancer_whitelist_pipeline
 ##reference=GRCh38/hg38
 ##contig=<ID=1,length=248956422,assembly=GRCh38>
 ##contig=<ID=2,length=242193529,assembly=GRCh38>
@@ -806,6 +806,8 @@ def _aggregate_pandas(df_coord: pd.DataFrame) -> pd.DataFrame:
         df_coord['oncokb_oncogenicity'] = ''
     if 'tp53_class' not in df_coord.columns:
         df_coord['tp53_class'] = ''
+    if 'clinvar_clinical_significance' not in df_coord.columns:
+        df_coord['clinvar_clinical_significance'] = ''
 
     # Add source priority for deterministic hgvsc selection
     df_coord['_src_priority'] = df_coord['source'].map(
@@ -964,6 +966,13 @@ def write_tsv(df: pd.DataFrame, path: str) -> None:
 
 def write_vcf(df: pd.DataFrame, path: str) -> None:
     """Write whitelist as a sites-only VCF (no sample columns)."""
+
+    def _vcf_escape(val):
+        """Escape VCF INFO special characters."""
+        if not isinstance(val, str):
+            val = str(val)
+        return val.replace('%', '%25').replace(';', '%3B').replace('=', '%3D').replace(' ', '%20').replace('\t', '').replace('\n', '')
+
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
     # Sort by chromosome order then position
@@ -987,18 +996,18 @@ def write_vcf(df: pd.DataFrame, path: str) -> None:
             info_parts = [
                 f'GENE={row.gene}',
                 f'CSQ={row.consequence}',
-                f'HGVSc={row.hgvsc}',
-                f'HGVSp={row.hgvsp}',
+                f'HGVSc={_vcf_escape(row.hgvsc)}',
+                f'HGVSp={_vcf_escape(row.hgvsp)}',
                 f'N_SAMPLES={row.n_samples}',
                 f'N_CANCER_TYPES={row.n_cancer_types}',
-                f'CANCER_TYPES={row.cancer_types}',
-                f'SOURCES={row.sources}',
+                f'CANCER_TYPES={_vcf_escape(row.cancer_types)}',
+                f'SOURCES={_vcf_escape(row.sources)}',
                 f'WL_TIER={row.wl_tier}',
             ]
             if getattr(row, 'oncokb_oncogenicity', None):
-                info_parts.append(f'ONCOKB={row.oncokb_oncogenicity}')
+                info_parts.append(f'ONCOKB={_vcf_escape(row.oncokb_oncogenicity)}')
 
-            info = ';'.join(p for p in info_parts if not p.endswith('='))
+            info = ';'.join(p for p in info_parts if '=' in p and p.split('=', 1)[1])
             fh.write('\t'.join([
                 str(row.chrom),
                 str(row.pos),
@@ -1011,11 +1020,18 @@ def write_vcf(df: pd.DataFrame, path: str) -> None:
             ]) + '\n')
 
     if path.endswith('.gz'):
-        subprocess.run(['bgzip', '-f', tmp_path], check=True)
-        # bgzip writes to tmp_path + '.gz' by default, rename if needed
-        bgz_path = tmp_path + '.gz'
-        if bgz_path != path:
-            os.rename(bgz_path, path)
+        import shutil, gzip as _gzip
+        if shutil.which('bgzip'):
+            subprocess.run(['bgzip', '-f', tmp_path], check=True)
+            # bgzip writes to tmp_path + '.gz' by default, rename if needed
+            bgz_path = tmp_path + '.gz'
+            if bgz_path != path:
+                os.rename(bgz_path, path)
+        else:
+            log.warning('bgzip not found; using Python gzip (not BGZF — tabix indexing may fail)')
+            with open(tmp_path, 'rb') as f_in, _gzip.open(path, 'wb') as f_out:
+                f_out.writelines(f_in)
+            os.remove(tmp_path)
 
     log.info('Wrote VCF: %s  (%d variants)', path, len(df))
 
@@ -1104,10 +1120,12 @@ def log_database_versions(cfg: dict, settings_file: str = 'settings.yaml') -> No
     # TP53
     if ds.get('tp53', {}).get('enabled'):
         tsv = ds['tp53'].get('somatic_tsv', '')
-        version = 'unknown'
-        if os.path.exists(tsv):
-            mtime = os.path.getmtime(tsv)
-            version = f'downloaded {datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")}'
+        version = ds['tp53'].get('version')
+        if not version:
+            version = 'unknown'
+            if os.path.exists(tsv):
+                mtime = os.path.getmtime(tsv)
+                version = f'downloaded {datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")}'
         _add('TP53 database', version, tsv)
 
     # TCGA — version from filename
@@ -1168,7 +1186,7 @@ def main():
                         help='Run parsers and save intermediates; do not merge')
     parser.add_argument('--data-dir', default='',
                         help='Path to reference data directory. Overrides relative '
-                             'paths in config.yaml (e.g. /srv/data/reference/)')
+                             'paths in config.yaml (e.g. /path/to/reference/)')
     args = parser.parse_args()
 
     cfg  = load_config(args.config)
@@ -1213,7 +1231,7 @@ def main():
             api_token            = ds['oncokb'].get('api_token'),
         )
         ipath = os.path.join(inter_dir, 'oncokb.tsv.gz')
-        frames['OncoKB'].to_csv(ipath, sep='\t', index=False)
+        frames['OncoKB'].to_csv(ipath, sep='\t', index=False, compression='gzip')
         log.info('Saved intermediate: %s  (%d rows)', ipath, len(frames['OncoKB']))
     elif args.from_intermediates:
         log.info('Loading from intermediate files in: %s', inter_dir)

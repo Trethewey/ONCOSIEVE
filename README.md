@@ -1,9 +1,8 @@
 <div align="center">
-  <h1>ONCOSIEVE</h1>
+  <img src="assets/oncosieve-grid-redblue-text.svg" width="550" alt="OncoSieve logo"/>
   <p><strong>Pan-Cancer Somatic Variant Whitelist Curation Tool</strong></p>
   <p><em>7 databases · 46.4 million variants</em></p>
   <p><em>1 curated whitelist</em></p>
-  <img src="assets/oncosieve-grid-redblue-text.svg" width="550" alt="ONCOSIEVE logo"/>
   <p>
     <strong>Author:</strong> Dr Christopher Trethewey<br>
     <strong>Email:</strong> christopher.trethewey@nhs.net
@@ -14,26 +13,35 @@
 
 ## Overview
 
-ONCOSIEVE builds a pan-cancer somatic variant whitelist from multiple curated databases and uses it to rescue low-VAF variants from Mutect2 post-filter calls. Designed for use in research NGS pipelines.
+OncoSieve builds a pan-cancer somatic variant whitelist from multiple curated databases and uses it to rescue low-VAF variants from Mutect2 post-filter calls. Whitelist entries are scored for pathogenicity with REVEL and PrimateAI-3D. Designed for use in research NGS pipelines.
 
 > [!WARNING]
-> **Research use only.** ONCOSIEVE is an experimental research tool and has not been validated for clinical diagnostic use. It must not be used to inform patient management or clinical decision-making without independent validation in an accredited diagnostic setting.
+> **Research use only.** OncoSieve is an experimental research tool and has not been validated for clinical diagnostic use. It must not be used to inform patient management or clinical decision-making without independent validation in an accredited diagnostic setting.
 
 ---
 
 ## Data sources
 
-| Source         | Version  | Type | Approx. variants (source total) | Notes                                                                                |
-|----------------|----------|------|---------------------------------|--------------------------------------------------------------------------------------|
-| COSMIC         | v103     | File | ~38,000,000                     | GRCh38 TSV + VCF + Classification file; cancer type resolved via PRIMARY_HISTOLOGY  |
-| AACR GENIE     | v19.0    | File | ~3,750,000                      | MAF; 271,837 samples / 227,696 patients; 19 cancer centres; GRCh37 lifted to GRCh38 |
-| TCGA mc3       | v0.2.8   | File | ~3,600,963                      | PanCancer Atlas MAF; 33 cancer types; 10,295 tumours; GRCh37 lifted to GRCh38       |
-| ClinVar        | 2025     | File | ~1,000,000                      | GRCh38 VCF; pathogenic/likely pathogenic and somatic-flagged filtered                |
-| OncoKB         | Current  | API  | ~7,700                          | ~850 genes; 130 cancer types; academic token required                                |
-| TP53 database  | R21      | File | ~29,900                         | GRCh38 CSV; functional annotations for >9,000 mutant proteins                        |
-| CancerHotspots | v2       | File | ~3,181                          | GRCh38 MANE Select TSV; q-value filtered                                             |
-|                |          |      |                                 |                                                                                      |
-| **Raw total**  |          |      | **~46,400,000**                 | Pre-deduplication; significant inter-database overlap expected                        |
+| Source         | Version       | Type | Approx. variants (source total) | Notes                                                                                |
+|----------------|---------------|------|---------------------------------|--------------------------------------------------------------------------------------|
+| COSMIC         | v103          | File | ~38,000,000                     | GRCh38 TSV + VCF + Classification file; cancer type resolved via PRIMARY_HISTOLOGY  |
+| AACR GENIE     | v19.0         | File | ~3,750,000                      | MAF; 271,837 samples / 227,696 patients; 19 cancer centres; GRCh37 lifted to GRCh38 |
+| TCGA mc3       | v0.2.8        | File | ~3,600,963                      | PanCancer Atlas MAF; 33 cancer types; 10,295 tumours; GRCh37 lifted to GRCh38       |
+| ClinVar        | 2026-03-09    | File | ~1,000,000                      | GRCh38 VCF; pathogenic/likely pathogenic and somatic-flagged filtered                |
+| OncoKB         | v7.1 (Apr 2026) | API | ~7,700                         | ~850 genes; 130 cancer types; academic token required                                |
+| TP53 database  | R21           | File | ~29,900                         | GRCh38 CSV; functional annotations for >9,000 mutant proteins                        |
+| CancerHotspots | v2            | File | ~3,181                          | GRCh38 MANE Select TSV; q-value filtered                                             |
+|                |               |      |                                 |                                                                                      |
+| **Raw total**  |               |      | **~46,400,000**                 | Pre-deduplication; significant inter-database overlap expected                        |
+
+### Annotation layers
+
+Applied after whitelist construction, in `tools/post_pipeline.py`:
+
+| Layer        | Version           | Coverage          | Output columns                                              |
+|--------------|-------------------|-------------------|-------------------------------------------------------------|
+| REVEL        | v1.3              | Missense          | `revel_score` (0–1, higher = more pathogenic)               |
+| PrimateAI-3D | hg38 (70.6M)      | Missense          | `primateai_score`, `primateai_percentile`, `primateai_prediction` |
 
 ### Cancer type annotation
 
@@ -59,10 +67,17 @@ oncosieve/
 ├── post_process_whitelist.py   # Adds genome_version, transcript_id, protein_change columns
 ├── pre_check.py                # Pre-run dependency and data audit
 ├── test_pipeline.py            # Test harness
-├── run_oncosieve.sh             # Orchestrator; run this to start the pipeline
+├── run_oncosieve.sh            # Orchestrator; run this to start the pipeline
 ├── config.yaml                 # File paths and source enable/disable flags
 ├── settings.yaml               # Thresholds and parameters (edit this)
 ├── requirements.txt
+├── assets/                     # Logos used by the HTML report and README
+├── packaging/                  # Docker, conda, pip distribution
+│   ├── Dockerfile
+│   ├── docker-compose.yml
+│   ├── environment.yml         # conda env spec
+│   ├── setup.py                # pip-installable package
+│   └── Makefile
 ├── panels/
 │   └── lymphoma.bed            # Add panel BED files here
 ├── parsers/
@@ -76,13 +91,14 @@ oncosieve/
 ├── tools/
 │   ├── annotate_panels.py      # Panel BED annotation
 │   ├── annotate_revel.py       # Standalone REVEL annotation
+│   ├── annotate_primateai.py   # Standalone PrimateAI-3D annotation
 │   ├── clinvar_vep_annotate.py
 │   ├── db_fix.py               # Liftover GRCh37->GRCh38 for GENIE and TCGA MAFs
 │   ├── hotspots_vep_remap.py
 │   ├── mane_audit.py
 │   ├── mane_remap.py
-│   ├── post_pipeline.py        # Post-pipeline: REVEL, high-confidence filter, xlsx export, HTML report
-│   └── generate_report.py     # HTML report with Plotly charts and DataTables
+│   ├── post_pipeline.py        # Post-pipeline: REVEL + PrimateAI-3D, high-confidence filter, xlsx export, HTML report
+│   └── generate_report.py      # HTML report with Plotly charts and DataTables
 └── logs/                       # Auto-created on first run
 ```
 
@@ -123,7 +139,7 @@ pip install -r requirements.txt
 
 ```bash
 # 1. Clone and install
-git clone <repo_url> && cd oncosieve.1.0
+git clone https://github.com/Trethewey/ONCOSIEVE.git && cd ONCOSIEVE
 pip install -r requirements.txt
 
 # 2. Copy settings.yaml.example to settings.yaml and add your OncoKB token
@@ -134,7 +150,7 @@ cp settings.yaml.example settings.yaml
 #    Place files in the data/ subdirectories as shown in the directory structure
 
 # 4. Create required directories
-mkdir -p data/{cosmic,genie,TCGA,clinvar,tp53,hotspots,oncokb,REVEL,reference}
+mkdir -p data/{cosmic,genie,TCGA,clinvar,tp53,hotspots,oncokb,REVEL,PRIMATE_AI,reference}
 mkdir -p output intermediate panels logs
 
 # 5. Liftover GENIE and TCGA from GRCh37 to GRCh38 (one-time)
@@ -188,8 +204,10 @@ data/
 │   └── hotspots_grch38_mane.tsv     # After hotspots_vep_remap.py
 ├── oncokb/
 │   └── allAnnotatedVariants.txt     # Optional if using API token
-└── REVEL/
-    └── revel_with_transcript_ids    # ~6 GB uncompressed
+├── REVEL/
+│   └── revel_with_transcript_ids    # ~6 GB uncompressed
+└── PRIMATE_AI/
+    └── PrimateAI-3D.hg38.txt.gz     # ~1.7 GB; 70.6M missense variant scores
 ```
 
 ---
@@ -279,6 +297,12 @@ cd data/REVEL && unzip revel-v1.3_all_chromosomes.zip
 
 The extracted file `revel_with_transcript_ids` (~82 million rows, ~6 GB uncompressed) is required for post-pipeline REVEL annotation. The pipeline picks this up automatically from `data/REVEL/revel_with_transcript_ids`.
 
+### PrimateAI-3D
+
+PrimateAI-3D scores require an academic data licence from Illumina. Request access via the Illumina PrimateAI-3D portal and accept the licence terms before downloading.
+
+Place the GRCh38 score file at `data/PRIMATE_AI/PrimateAI-3D.hg38.txt.gz` (~1.7 GB, 70.6M missense variants). The pipeline picks this up automatically and adds `primateai_score`, `primateai_percentile`, and `primateai_prediction` columns to the post-pipeline output. If the file is missing the step is skipped silently.
+
 ---
 
 ## Usage
@@ -304,7 +328,7 @@ bash run_oncosieve.sh --skip-sources cosmic,tcga
 
 ### 2. Post-pipeline processing
 
-Post-pipeline processing (REVEL annotation, high-confidence filtering, Excel export, HTML report) runs automatically as step 7 of `run_oncosieve.sh` if the REVEL file is present at `data/REVEL/revel_with_transcript_ids`.
+Post-pipeline processing (REVEL + PrimateAI-3D annotation, high-confidence filtering, Excel export, HTML report) runs automatically as step 7 of `run_oncosieve.sh` if the REVEL file is present at `data/REVEL/revel_with_transcript_ids`. PrimateAI-3D annotation is added if `data/PRIMATE_AI/PrimateAI-3D.hg38.txt.gz` is present.
 
 To run manually:
 
@@ -313,6 +337,7 @@ python3 tools/post_pipeline.py \
     --whitelist output/pan_cancer_whitelist_GRCh38_annotated.tsv.gz \
     --vcf       output/pan_cancer_whitelist_GRCh38.vcf.gz \
     --revel     data/REVEL/revel_with_transcript_ids \
+    --primateai data/PRIMATE_AI/PrimateAI-3D.hg38.txt.gz \
     --out-dir   output/
 ```
 
@@ -320,12 +345,12 @@ This produces:
 
 | File | Description |
 |------|-------------|
-| `pan_cancer_whitelist_GRCh38_full.tsv.gz` | Full whitelist with REVEL scores, restructured columns |
+| `pan_cancer_whitelist_GRCh38_full.tsv.gz` | Full whitelist with REVEL + PrimateAI-3D scores, restructured columns |
 | `pan_cancer_whitelist_GRCh38_full.xlsx` | Full whitelist Excel export with summary and data sheets |
 | `pan_cancer_whitelist_GRCh38_highconf.tsv.gz` | High-confidence whitelist (ClinVar-only zero-sample variants removed) |
 | `pan_cancer_whitelist_GRCh38_highconf.vcf.gz` | High-confidence VCF |
 | `pan_cancer_whitelist_GRCh38_highconf.xlsx` | High-confidence Excel export with summary and data sheets |
-| `oncosieve_report_YYYY-MM-DD.html` | Interactive HTML report with Plotly charts, variant tables, and references |
+| `oncosieve_report_YYYY-MM-DD.html` | Interactive HTML report with sources table, KPI cards, Plotly charts, searchable variant table, CSV download, references |
 
 ### 3. Annotate with diagnostic panels
 
@@ -376,6 +401,9 @@ python3 mutect2_rescue.py \
 | 20 | wl_tier | int | Whitelist tier (1=highest confidence, 2=good evidence, 3=count-based below Tier 2) |
 | 21 | genome_version | str | Genome build (GRCh38) |
 | 22 | revel_score | float | REVEL pathogenicity score (missense only; 0-1) |
+| 23 | primateai_score | float | PrimateAI-3D pathogenicity score (missense only; 0-1) |
+| 24 | primateai_percentile | float | PrimateAI-3D genome-wide percentile (0-1) |
+| 25 | primateai_prediction | str | PrimateAI-3D classification (benign / pathogenic) |
 
 ---
 
@@ -395,7 +423,7 @@ VAF floors are configurable in `settings.yaml` under `vaf_rescue`.
 
 ## Transcript annotation
 
-HGVSc strings are carried through from source databases where available. They are not re-annotated by ONCOSIEVE. Transcript concordance across sources is not guaranteed. Use coordinates (chrom, pos, ref, alt) as the authoritative join key.
+HGVSc strings are carried through from source databases where available. They are not re-annotated by OncoSieve. Transcript concordance across sources is not guaranteed. Use coordinates (chrom, pos, ref, alt) as the authoritative join key.
 
 ---
 
@@ -414,9 +442,41 @@ Register at: https://www.oncokb.org/account/register
 
 ---
 
+## Packaging
+
+The `packaging/` directory ships three distribution paths so the pipeline can be deployed beyond a manual git clone.
+
+### Docker
+
+```bash
+docker build -f packaging/Dockerfile -t oncosieve .
+docker run --rm -v $PWD/data:/app/data -v $PWD/output:/app/output oncosieve
+```
+
+A `docker-compose.yml` is provided in `packaging/` for single-command runs once `data/` is in place.
+
+### Conda
+
+```bash
+conda env create -f packaging/environment.yml
+conda activate oncosieve
+bash run_oncosieve.sh
+```
+
+### pip (editable install)
+
+```bash
+pip install -e packaging/
+oncosieve   # exposed as a CLI entry point
+```
+
+All three paths assume the `data/` directory is populated as described in [Data preparation](#data-preparation). Reference data is not bundled with any package.
+
+---
+
 ## References
 
-If you use ONCOSIEVE in published work, please cite the underlying databases using the references below.
+If you use OncoSieve in published work, please cite the underlying databases using the references below.
 
 **COSMIC**
 Tate JG, Bamford S, Jubb HC, et al. COSMIC: the Catalogue Of Somatic Mutations In Cancer. Nucleic Acids Res. 2019;47(D1):D941-D947.
@@ -460,3 +520,7 @@ Chang MT, et al. Accelerating discovery of functional mutant alleles in cancer. 
 **REVEL**
 Ioannidis NM, Rothstein JH, Pejaver V, et al. REVEL: An Ensemble Method for Predicting the Pathogenicity of Rare Missense Variants. Am J Hum Genet. 2016;99(4):877-885.
 [doi:10.1016/j.ajhg.2016.08.016](https://doi.org/10.1016/j.ajhg.2016.08.016) · [PMID:27666373](https://pubmed.ncbi.nlm.nih.gov/27666373/)
+
+**PrimateAI-3D**
+Gao H, Hamp T, Ede J, et al. The landscape of tolerated genetic variation in humans and other primates. Science. 2023;380(6648):eabn8197.
+[doi:10.1126/science.abn8197](https://doi.org/10.1126/science.abn8197) · [PMID:37262156](https://pubmed.ncbi.nlm.nih.gov/37262156/)

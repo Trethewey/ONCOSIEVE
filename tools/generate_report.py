@@ -28,6 +28,8 @@ Usage:
 import argparse
 import base64
 import html as html_module
+import json
+import re
 from datetime import date
 from pathlib import Path
 
@@ -117,15 +119,30 @@ def _revel_stat(df):
     return f"{n:,} ({pct:.1f}%)"
 
 
+def _primateai_stat(df):
+    if "primateai_score" not in df.columns:
+        return None
+    ps = pd.to_numeric(df["primateai_score"], errors="coerce")
+    n = ps.notna().sum()
+    if n == 0:
+        return None
+    pct = n / len(df) * 100 if len(df) else 0
+    return f"{n:,} ({pct:.1f}%)"
+
+
 def build_kpi_cards(df_full, df_hc):
     cards = [
         ("Full Whitelist",  df_full, ACCENT),
-        ("High-Confidence", df_hc,   "#78d4a0"),
+        ("High-Confidence", df_hc,   "#C0392B"),
     ]
     parts = []
     for title, df, color in cards:
         t1 = int((df["wl_tier"] == 1).sum())
         t2 = int((df["wl_tier"] == 2).sum())
+        pai_line = ''
+        pai_stat = _primateai_stat(df)
+        if pai_stat:
+            pai_line = f'<div class="kpi-detail">PrimateAI-3D scored: {pai_stat}</div>'
         parts.append(
             f'<div class="kpi-card" style="border-top:3px solid {color}">'
             f'<div class="kpi-title">{title}</div>'
@@ -137,6 +154,7 @@ def build_kpi_cards(df_full, df_hc):
             f'<span class="kpi-badge" style="color:{TIER_COLORS[2]}">Tier 2: {t2:,}</span>'
             f'</div>'
             f'<div class="kpi-detail">REVEL scored: {_revel_stat(df)}</div>'
+            f'{pai_line}'
             f'<div class="kpi-detail kpi-sources">{_source_counts_str(df)}</div>'
             f'</div>'
         )
@@ -328,6 +346,7 @@ DISPLAY_COLS = [
     "n_samples", "n_cancer_types", "sources",
     "oncokb_oncogenicity", "clinvar_clinical_significance",
     "transcript_source", "tp53_class", "revel_score",
+    "primateai_score", "primateai_percentile", "primateai_prediction",
 ]
 
 _TIER_COL_IDX  = DISPLAY_COLS.index("wl_tier")
@@ -335,6 +354,14 @@ _NSAMP_COL_IDX = DISPLAY_COLS.index("n_samples")
 
 
 def build_datatable(df, table_id):
+    """
+    Returns (table_html, data_json, tier_col_idx).
+
+    table_html has an empty <tbody>; DataTables populates it lazily from
+    `data_json`, which is a JSON array of arrays of pre-escaped cell strings.
+    tier_col_idx is the index of the wl_tier column in each row (or -1) so the
+    JS createdRow callback can apply the tier-N row class.
+    """
     cols = [c for c in DISPLAY_COLS if c in df.columns]
     sub = df[cols].copy()
     if "revel_score" in sub.columns:
@@ -345,16 +372,68 @@ def build_datatable(df, table_id):
         return "" if pd.isna(v) else html_module.escape(str(v))
 
     thead = "<thead><tr>" + "".join(f"<th>{c}</th>" for c in cols) + "</tr></thead>"
-    rows = []
-    for _, row in sub.iterrows():
-        tier = row.get("wl_tier", "")
-        tc = f"tier-{int(float(tier))}" if str(tier).replace(".", "").isdigit() else ""
-        cells = "".join(f"<td>{esc(row[c])}</td>" for c in cols)
-        rows.append(f'<tr class="{tc}">{cells}</tr>')
-    tbody = "<tbody>" + "".join(rows) + "</tbody>"
-    return (
+    table_html = (
         f'<table id="{table_id}" class="display compact" style="width:100%">'
-        f"{thead}{tbody}</table>"
+        f"{thead}<tbody></tbody></table>"
+    )
+
+    rows_data = [[esc(row[c]) for c in cols] for _, row in sub.iterrows()]
+    data_json = json.dumps(rows_data, separators=(",", ":"))
+    tier_col_idx = cols.index("wl_tier") if "wl_tier" in cols else -1
+    return table_html, data_json, tier_col_idx
+
+
+# ── Database versions / Sources table ──────────────────────────────────────────
+
+_DB_LINE_RE = re.compile(r'^([A-Za-z][\w/. ]*?)\s{2,}(\S.*?)\s*\(([^)]+)\)\s*$')
+
+
+def _parse_db_versions(path):
+    """Parse build_whitelist's database_versions.txt into structured rows."""
+    if not path:
+        return []
+    p = Path(path)
+    if not p.exists():
+        return []
+    out = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        m = _DB_LINE_RE.match(line)
+        if not m:
+            continue
+        source  = m.group(1).strip()
+        version = m.group(2).strip()
+        origin  = m.group(3).strip()
+        # Strip leading "##fileDate=" if present (ClinVar)
+        version = version.replace("##fileDate=", "")
+        origin_type = "API" if origin.startswith("http") else "File"
+        origin_short = origin if origin_type == "API" else Path(origin).name
+        out.append({
+            "source": source,
+            "version": version,
+            "type": origin_type,
+            "origin": origin_short,
+        })
+    return out
+
+
+def build_sources_table(entries):
+    if not entries:
+        return ""
+    rows = []
+    for e in entries:
+        rows.append(
+            "<tr>"
+            f'<td class="src-name">{html_module.escape(e["source"])}</td>'
+            f'<td class="src-version">{html_module.escape(e["version"])}</td>'
+            f'<td class="src-type">{html_module.escape(e["type"])}</td>'
+            f'<td class="src-origin">{html_module.escape(e["origin"])}</td>'
+            "</tr>"
+        )
+    return (
+        '<table class="sources-table">'
+        '<thead><tr><th>Database</th><th>Version / Date</th><th>Type</th><th>Origin</th></tr></thead>'
+        '<tbody>' + "".join(rows) + '</tbody>'
+        '</table>'
     )
 
 
@@ -395,6 +474,9 @@ REFERENCES = [
     ("REVEL",
      "Ioannidis NM et al. Am J Hum Genet. 2016;99(4):877-885.",
      "doi:10.1016/j.ajhg.2016.08.016", "PMID:27666373"),
+    ("PrimateAI-3D",
+     "Gao H et al. Science. 2023;380(6648):eabn8197.",
+     "doi:10.1126/science.abn8197", "PMID:37262156"),
 ]
 
 
@@ -455,6 +537,21 @@ def _logo_tag(logo_path):
     )
 
 
+def _favicon_tag(logo_path):
+    if not logo_path:
+        return ""
+    p = Path(logo_path)
+    if not p.exists():
+        return ""
+    suffix = p.suffix.lower().lstrip(".")
+    mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg",
+            "png": "image/png", "gif": "image/gif", "svg": "image/svg+xml",
+            "ico": "image/x-icon"}
+    mt = mime.get(suffix, "image/png")
+    b64 = base64.b64encode(p.read_bytes()).decode()
+    return f'<link rel="icon" type="{mt}" href="data:{mt};base64,{b64}">'
+
+
 # ── CSS ────────────────────────────────────────────────────────────────────────
 
 _CSS_TEMPLATE = """
@@ -504,17 +601,22 @@ body {
 }
 .header-logo {
   width: 150px; height: 150px;
-  border-radius: 50%%;
   flex-shrink: 0;
-  background: %(BG_PAGE)s;
-  object-fit: cover;
+  object-fit: contain;
   margin-left: auto;
   order: 2;
 }
 .header-text { display: flex; flex-direction: column; order: 1; flex: 1; }
 .header-title {
-  margin: 0; font-size: 45px; font-weight: 800;
-  letter-spacing: -0.8px; color: %(TEXT_PRI)s; line-height: 1.1;
+  margin: 0; font-size: 45px; font-weight: 700;
+  letter-spacing: -0.5px; color: %(TEXT_PRI)s; line-height: 1.1;
+}
+.header-version {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: %(TEXT_SEC)s;
+  vertical-align: baseline;
 }
 .header-sep {
   display: block;
@@ -588,7 +690,25 @@ body {
 .tab-panel.active { display: block; }
 
 /* References */
-.ref-table { width: 100%%; border-collapse: collapse; font-size: 18px; }
+.sources-table {
+  width: 100%%; border-collapse: collapse; font-size: 14px;
+  margin-bottom: 18px;
+}
+.sources-table thead th {
+  text-align: left; padding: 10px 14px;
+  border-bottom: 2px solid %(BORDER)s;
+  font-weight: 600; color: %(TEXT_PRI)s;
+  background: %(BG_CHART)s;
+}
+.sources-table tbody tr   { border-bottom: 1px solid %(BORDER)s; }
+.sources-table tbody tr:last-child { border-bottom: none; }
+.sources-table tbody td   { padding: 8px 14px; vertical-align: top; color: %(TEXT_PRI)s; }
+.src-name    { font-weight: 600; color: %(ACCENT)s; white-space: nowrap; }
+.src-version { white-space: nowrap; }
+.src-type    { white-space: nowrap; color: %(TEXT_SEC)s; }
+.src-origin  { font-family: monospace; font-size: 12px; color: %(TEXT_SEC)s; word-break: break-all; }
+
+.ref-table { width: 100%%; border-collapse: collapse; font-size: 16px; }
 .ref-table thead th {
   text-align: left; font-size: 14px; font-weight: 700;
   text-transform: uppercase; letter-spacing: 0.8px;
@@ -598,8 +718,8 @@ body {
 .ref-table tbody tr:last-child { border-bottom: none; }
 .ref-table tbody td   { padding: 10px 14px; vertical-align: top; }
 .ref-source { white-space: nowrap; font-weight: 600; color: %(ACCENT)s; width: 160px; }
-.ref-citation { color: %(TEXT_SEC)s; }
-.ref-doi { font-size: 14px; color: %(TEXT_SEC)s; font-family: monospace; opacity: 0.75; }
+.ref-citation { color: %(TEXT_PRI)s; }
+.ref-doi { font-size: 12px; color: %(TEXT_PRI)s; font-family: monospace; opacity: 0.75; }
 .ref-link { color: #89c2a2; text-decoration: none; }
 .ref-link:hover { text-decoration: underline; }
 
@@ -673,7 +793,7 @@ def _css():
 
 # ── HTML assembly ──────────────────────────────────────────────────────────────
 
-def build_report(df_full, df_hc, out_path, logo_path=None):
+def build_report(df_full, df_hc, out_path, logo_path=None, db_versions_path=None):
     print("  Building charts...")
     f_source             = chart_source_bars(df_hc)
     f_conseq             = chart_consequence_bars(df_hc)
@@ -686,12 +806,14 @@ def build_report(df_full, df_hc, out_path, logo_path=None):
     div_genes  = fig_to_div(f_genes)
 
     print("  Building variant table (high-confidence)...")
-    tbl_hc = build_datatable(df_hc, "tbl-hc")
+    tbl_hc, tbl_hc_data, tbl_hc_tier_idx = build_datatable(df_hc, "tbl-hc")
 
     print("  Assembling HTML...")
     logo_img    = _logo_tag(logo_path)
+    favicon_tag = _favicon_tag(logo_path)
     kpi_html    = build_kpi_cards(df_full, df_hc)
     refs_html   = build_references_html()
+    sources_table_html = build_sources_table(_parse_db_versions(db_versions_path))
     report_date = date.today().isoformat()
     n_hc        = len(df_hc)
     css         = _css()
@@ -703,17 +825,21 @@ def build_report(df_full, df_hc, out_path, logo_path=None):
         "<head>",
         '<meta charset="UTF-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
-        f"<title>ONCOSIEVE Report {report_date}</title>",
+        favicon_tag,
+        f"<title>OncoSieve Report {report_date}</title>",
         '<link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/jquery.dataTables.min.css">',
+        '<link rel="stylesheet" href="https://cdn.datatables.net/buttons/2.4.2/css/buttons.dataTables.min.css">',
         '<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>',
         '<script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>',
+        '<script src="https://cdn.datatables.net/buttons/2.4.2/js/dataTables.buttons.min.js"></script>',
+        '<script src="https://cdn.datatables.net/buttons/2.4.2/js/buttons.html5.min.js"></script>',
         f"<style>{css}</style>",
         "</head>",
         "<body>",
 
         # Nav
         '<nav class="topnav">',
-        '  <span class="brand">ONCOSIEVE v1.0</span>',
+        '  <span class="brand">OncoSieve</span>',
         '  <a href="#summary">Summary</a>',
         '  <a href="#table">Variant Table</a>',
         '  <a href="#sources">Sources</a>',
@@ -729,10 +855,10 @@ def build_report(df_full, df_hc, out_path, logo_path=None):
         '<div class="page-header">',
         f"  {logo_img}",
         '  <div class="header-text">',
-        '    <h1 class="header-title">ONCOSIEVE</h1>',
+        '    <h1 class="header-title">OncoSieve&nbsp;&nbsp;<span class="header-version">2.0</span></h1>',
         '    <span class="header-sep"></span>',
-        '    <p class="header-subtitle">Pan-Cancer Variant Whitelist</p>',
-        f'    <div class="header-meta">GRCh38 &nbsp;&middot;&nbsp; Generated {report_date} &nbsp;&middot;&nbsp; COSMIC &middot; GENIE &middot; TCGA &middot; ClinVar &middot; OncoKB &middot; CancerHotspots &middot; TP53</div>',
+        f'    <p class="header-subtitle">Pan-Cancer Variant Whitelist &nbsp;&ndash;&nbsp; Generated {report_date}</p>',
+        '    <div class="header-meta">GRCh38 &nbsp;&middot;&nbsp; COSMIC &middot; GENIE &middot; TCGA &middot; ClinVar &middot; OncoKB &middot; CancerHotspots &middot; TP53 &nbsp;&ndash;&nbsp; REVEL &middot; PrimateAI-3D</div>',
         '    <div class="header-meta"><a href="https://github.com/Trethewey/ONCOSIEVE" style="color:#3D6E8F;text-decoration:none;">&#128279; github.com/Trethewey/ONCOSIEVE</a></div>',
         "  </div>",
         "</div>",
@@ -754,6 +880,7 @@ def build_report(df_full, df_hc, out_path, logo_path=None):
         # Sources
         '<div class="section" id="sources">',
         '  <div class="section-title">Source Contribution (High-Confidence)</div>',
+        ('  <div class="chart-card">' + sources_table_html + '</div>') if sources_table_html else '',
         '  <div class="chart-card">',
         f"    {div_source}",
         "  </div>",
@@ -794,19 +921,36 @@ def build_report(df_full, df_hc, out_path, logo_path=None):
 
         # Footer
         '<div class="page-footer">',
-        f"  ONCOSIEVE v1.0 &nbsp;&middot;&nbsp; GRCh38 &nbsp;&middot;&nbsp; {report_date}",
+        f"  OncoSieve &nbsp;&middot;&nbsp; GRCh38 &nbsp;&middot;&nbsp; {report_date}",
         "</div>",
 
         "</div><!-- /container -->",
 
         "<script>",
+        f"var TBL_HC_DATA = {tbl_hc_data};",
+        f"var TBL_HC_TIER_IDX = {tbl_hc_tier_idx};",
         "$(document).ready(function () {",
         "  $('#tbl-hc').DataTable({",
+        "    data: TBL_HC_DATA,",
         "    pageLength: 25,",
         "    lengthMenu: [10, 25, 50, 100, 250],",
         f"    order: [[{nsamp_col}, 'desc']],",
         "    scrollX: true,",
         "    deferRender: true,",
+        "    dom: '<\"dt-toolbar\"lBf>rtip',",
+        "    buttons: [{",
+        "      extend: 'csv',",
+        "      text: 'Download CSV',",
+        "      filename: 'oncosieve_highconf_variants_' + new Date().toISOString().slice(0,10),",
+        "      exportOptions: { columns: ':visible' }",
+        "    }],",
+        "    createdRow: function (row, data) {",
+        "      if (TBL_HC_TIER_IDX < 0) return;",
+        "      var t = data[TBL_HC_TIER_IDX];",
+        "      if (t === '1' || t === 1) row.classList.add('tier-1');",
+        "      else if (t === '2' || t === 2) row.classList.add('tier-2');",
+        "      else if (t === '3' || t === 3) row.classList.add('tier-3');",
+        "    },",
         "    language: { search: 'Search:', lengthMenu: 'Show _MENU_ rows' }",
         "  });",
         "});",
@@ -833,6 +977,8 @@ def main():
                         help="Output directory (default: output/)")
     parser.add_argument("--logo",     default=None,
                         help="Path to logo image (jpg/png) to embed in the report header")
+    parser.add_argument("--db-versions", default=None,
+                        help="Path to database_versions.txt for the Sources table (auto-discovered in --out-dir if omitted)")
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir)
@@ -847,7 +993,14 @@ def main():
     df_hc = pd.read_csv(args.highconf, sep="\t", compression="infer", low_memory=False)
     print(f"  {len(df_hc):,} variants")
 
-    build_report(df_full, df_hc, out_path, logo_path=args.logo)
+    db_versions_path = args.db_versions
+    if db_versions_path is None:
+        candidate = out_dir / "database_versions.txt"
+        if candidate.exists():
+            db_versions_path = str(candidate)
+
+    build_report(df_full, df_hc, out_path, logo_path=args.logo,
+                 db_versions_path=db_versions_path)
     print(f"\nReport: {out_path}")
 
 

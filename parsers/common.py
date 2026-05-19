@@ -153,7 +153,7 @@ def map_consequence(raw: str) -> str:
         mapped = CONSEQUENCE_MAP.get(t)
         if mapped:
             return mapped
-    return 'other'
+    return 'unknown'
 
 
 # ── Logging ───────────────────────────────────────────────────────────────────

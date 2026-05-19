@@ -20,7 +20,7 @@
 # Arguments:
 #   data_dir               Optional path to reference data directory.
 #                          Overrides relative data paths in config.yaml.
-#                          e.g. bash run_oncosieve.sh /srv/data/reference/
+#                          e.g. bash run_oncosieve.sh /path/to/reference/
 #
 # Options:
 #   --skip-sources STR     Comma-separated sources to skip, e.g. "genie,cbioportal"
@@ -122,8 +122,9 @@ log "Log file: $LOG_FILE"
 echo ""
 echo "  ╔══════════════════════════════════════════════════════════════╗"
 echo "  ║                                                              ║"
+echo "  ║                                                              ║"
 echo "  ║                      O N C O S I E V E                       ║"
-echo "  ║                                                        v1.0  ║"
+echo "  ║                                                              ║"
 echo "  ╚══════════════════════════════════════════════════════════════╝"
 echo "         Pan-Cancer Somatic Variant Whitelist Curation Tool"
 echo "                  github.com/Trethewey/ONCOSIEVE "
@@ -234,13 +235,24 @@ log "  VCF             : ${WL_FINAL}"
 # =============================================================================
 
 REVEL_FILE="${DATA_DIR:-data}/REVEL/revel_with_transcript_ids"
+PRIMATEAI_FILE="${DATA_DIR:-data}/PRIMATE_AI/PrimateAI-3D.hg38.txt.gz"
 
 if [[ -f "$REVEL_FILE" ]]; then
     log "Running post-pipeline processing..."
+
+    PAI_ARG=""
+    if [[ -f "$PRIMATEAI_FILE" ]]; then
+        PAI_ARG="--primateai $PRIMATEAI_FILE"
+        log "  PrimateAI-3D: $PRIMATEAI_FILE"
+    else
+        log "  PrimateAI-3D file not found — skipping PrimateAI-3D annotation."
+    fi
+
     "$PYTHON" tools/post_pipeline.py \
         --whitelist "$WL_TSV_ANNOTATED" \
         --vcf       "$WL_FINAL" \
         --revel     "$REVEL_FILE" \
+        $PAI_ARG \
         --out-dir   "$OUTPUT_DIR" \
         || warn "post_pipeline.py failed (non-fatal)."
 else

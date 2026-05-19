@@ -7,6 +7,7 @@
 #
 # Run after the main pipeline. Performs:
 #   1. REVEL annotation on the full whitelist TSV
+#   1b. PrimateAI-3D annotation (optional, if --primateai supplied)
 #   2. High-confidence TSV (removes ClinVar-only zero-sample variants)
 #   3. High-confidence VCF (filtered from full VCF via bcftools)
 #   4. Excel export of both TSVs with summary sheet and data sheet
@@ -16,6 +17,7 @@
 #       --whitelist output/pan_cancer_whitelist_GRCh38_annotated.tsv.gz \
 #       --vcf       output/pan_cancer_whitelist_GRCh38.vcf.gz \
 #       --revel     data/REVEL/revel_with_transcript_ids \
+#       --primateai data/PRIMATE_AI/PrimateAI-3D.hg38.txt.gz \
 #       --out-dir   output/
 # =============================================================================
 
@@ -120,6 +122,7 @@ def restructure_columns(df: pd.DataFrame) -> pd.DataFrame:
         'oncokb_oncogenicity', 'clinvar_clinical_significance',
         'transcript_source', 'tp53_class', 'wl_tier',
         'genome_version', 'revel_score',
+        'primateai_score', 'primateai_percentile', 'primateai_prediction',
     ]
     extra = [c for c in df.columns if c not in cols]
     df = df[[c for c in cols if c in df.columns] + extra]
@@ -130,7 +133,8 @@ def restructure_columns(df: pd.DataFrame) -> pd.DataFrame:
 # Numeric columns
 # =============================================================================
 
-NUMERIC_COLS = ['pos', 'n_cancer_types', 'n_samples', 'wl_tier', 'revel_score']
+NUMERIC_COLS = ['pos', 'n_cancer_types', 'n_samples', 'wl_tier', 'revel_score',
+                'primateai_score', 'primateai_percentile']
 
 
 def coerce_numerics(df: pd.DataFrame) -> pd.DataFrame:
@@ -147,22 +151,26 @@ def coerce_numerics(df: pd.DataFrame) -> pd.DataFrame:
 def compute_summary(df: pd.DataFrame, label: str) -> dict:
     sources       = df['sources'].fillna('').str.split('|').explode().str.strip()
     source_counts = sources[sources != ''].value_counts().to_dict()
-    tier_counts   = df['wl_tier'].fillna('').astype(str).value_counts().to_dict()
+    tier_counts   = df['wl_tier'].dropna().astype(int).astype(str).value_counts().to_dict()
     csq_counts    = df['consequence'].value_counts().to_dict()
     oncokb_present = df['oncokb_oncogenicity'].fillna('').ne('').sum()
     revel_present  = df['revel_score'].fillna('').astype(str).ne('').sum()
+    pai_col = 'primateai_score'
+    pai_present = (df[pai_col].fillna('').astype(str).ne('').sum()
+                   if pai_col in df.columns else 0)
     n_samp = pd.to_numeric(df['n_samples'], errors='coerce').fillna(0)
     clinvar_only   = ((n_samp == 0) &
                       (df['sources'].fillna('') == 'ClinVar')).sum()
     return {
-        'label':         label,
-        'total':         len(df),
-        'tier_counts':   tier_counts,
-        'csq_counts':    csq_counts,
-        'source_counts': source_counts,
-        'oncokb':        int(oncokb_present),
-        'revel_scored':  int(revel_present),
-        'clinvar_only':  int(clinvar_only),
+        'label':          label,
+        'total':          len(df),
+        'tier_counts':    tier_counts,
+        'csq_counts':     csq_counts,
+        'source_counts':  source_counts,
+        'oncokb':         int(oncokb_present),
+        'revel_scored':   int(revel_present),
+        'primateai_scored': int(pai_present),
+        'clinvar_only':   int(clinvar_only),
     }
 
 
@@ -216,7 +224,7 @@ def write_summary_sheet(wb, stats_full: dict, stats_hc: dict, run_date: str):
 
     ws.merge_cells('A1:C1')
     c = ws['A1']
-    c.value     = 'ONCOSIEVE v1.0 — Pan-Cancer Variant Whitelist'
+    c.value     = 'OncoSieve — Pan-Cancer Variant Whitelist'
     c.font      = Font(bold=True, size=14, color='1F4E79')
     c.alignment = Alignment(horizontal='left', vertical='center')
 
@@ -259,6 +267,7 @@ def write_summary_sheet(wb, stats_full: dict, stats_hc: dict, run_date: str):
     data_row('ClinVar-only (0 samples)',stats_full['clinvar_only'], stats_hc['clinvar_only'])
     data_row('With OncoKB annotation',  stats_full['oncokb'],       stats_hc['oncokb'])
     data_row('With REVEL score',        stats_full['revel_scored'], stats_hc['revel_scored'])
+    data_row('With PrimateAI-3D score', stats_full.get('primateai_scored', 0), stats_hc.get('primateai_scored', 0))
 
     section('Tier distribution')
     for tier in ['1', '2', '3']:
@@ -304,6 +313,8 @@ def write_data_sheet(wb, df: pd.DataFrame, sheet_name: str):
         'clinvar_clinical_significance': 28, 'transcript_source': 16,
         'tp53_class': 16, 'wl_tier': 8,
         'genome_version': 12, 'revel_score': 10,
+        'primateai_score': 12, 'primateai_percentile': 14,
+        'primateai_prediction': 14,
     }
 
     for i, col in enumerate(cols, 1):
@@ -343,7 +354,11 @@ def write_data_sheet(wb, df: pd.DataFrame, sheet_name: str):
     # Apply formatting in a second pass (column-oriented where possible)
     n_cols = len(cols)
     for r_idx in range(2, len(df) + 2):
-        tier = str(ws.cell(row=r_idx, column=tier_col_idx + 1).value) if tier_col_idx is not None else ''
+        raw_tier = ws.cell(row=r_idx, column=tier_col_idx + 1).value if tier_col_idx is not None else ''
+        try:
+            tier = str(int(raw_tier)) if raw_tier is not None and raw_tier != '' else ''
+        except (ValueError, TypeError):
+            tier = str(raw_tier) if raw_tier is not None else ''
         csq = str(ws.cell(row=r_idx, column=csq_col_idx + 1).value) if csq_col_idx is not None else ''
         row_fill = tier_fills.get(tier)
 
@@ -371,6 +386,8 @@ def main():
     ap.add_argument('--whitelist', required=True)
     ap.add_argument('--vcf',       required=True)
     ap.add_argument('--revel',     required=True)
+    ap.add_argument('--primateai', default=None,
+                    help='Path to PrimateAI-3D.hg38.txt.gz (optional)')
     ap.add_argument('--out-dir',   default='output')
     ap.add_argument('--logo',      default=None,
                     help='Path to logo image for HTML report '
@@ -388,10 +405,25 @@ def main():
     wl = pd.read_csv(args.whitelist, sep='\t', dtype=str, low_memory=False)
     print(f'  {len(wl)} variants, {len(wl.columns)} columns')
 
-    print('\n[2/6] Annotating with REVEL scores...')
+    print('\n[2/7] Annotating with REVEL scores...')
     wl = annotate_revel(wl, args.revel)
 
-    print('\n[3/6] Restructuring columns...')
+    # PrimateAI-3D annotation (optional)
+    pai_path = args.primateai
+    if pai_path and os.path.isfile(pai_path):
+        print('\n[3/7] Annotating with PrimateAI-3D scores...')
+        _tools_dir = os.path.dirname(os.path.abspath(__file__))
+        _pai_module = os.path.join(_tools_dir, 'annotate_primateai.py')
+        spec = importlib.util.spec_from_file_location('annotate_primateai', _pai_module)
+        pai_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pai_mod)
+        wl = pai_mod.annotate_primateai(wl, pai_path)
+    elif pai_path:
+        print(f'\n[3/7] PrimateAI-3D file not found: {pai_path} — skipping.')
+    else:
+        print('\n[3/7] PrimateAI-3D: no --primateai path supplied — skipping.')
+
+    print('\n[4/7] Restructuring columns...')
     wl = restructure_columns(wl)
     wl = coerce_numerics(wl)
     print(f'  Final columns: {list(wl.columns)}')
@@ -402,7 +434,7 @@ def main():
               compression='gzip' if full_tsv.endswith('.gz') else None)
     print(f'  Full TSV: {full_tsv}')
 
-    print('\n[4/6] Generating high-confidence whitelist...')
+    print('\n[5/7] Generating high-confidence whitelist...')
     clinvar_only_mask = (
         (wl['n_samples'].fillna(0) == 0) &
         (wl['sources'].fillna('') == 'ClinVar')
@@ -431,7 +463,7 @@ def main():
     else:
         print(f'  High-confidence VCF: {hc_vcf}')
 
-    print('\n[5/6] Exporting Excel files...')
+    print('\n[6/7] Exporting Excel files...')
     stats_full = compute_summary(wl,    'Full whitelist')
     stats_hc   = compute_summary(wl_hc, 'High-confidence')
 
@@ -453,7 +485,7 @@ def main():
     wb_hc.save(hc_xlsx)
     print(f'  High-confidence xlsx: {hc_xlsx}')
 
-    print('\n[6/6] Generating HTML report...')
+    print('\n[7/7] Generating HTML report...')
     _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     _report_script = os.path.join(_repo_root, 'tools', 'generate_report.py')
     if not os.path.exists(_report_script):

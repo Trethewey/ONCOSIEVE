@@ -1,0 +1,48 @@
+# =============================================================================
+# ONCOSIEVE v1.0 -- Docker Compose
+#
+# Usage:
+#   cd oncosieve.1.0
+#   docker-compose -f packaging/docker-compose.yml up
+#
+# Edit the volume paths below to point to your data and output directories.
+# =============================================================================
+
+version: "3.8"
+
+services:
+  oncosieve:
+    build:
+      context: ..
+      dockerfile: packaging/Dockerfile
+    image: oncosieve:1.0
+    container_name: oncosieve-run
+    volumes:
+      # Mount your local data directory (contains cosmic/, clinvar/, genie/, etc.)
+      - ../data:/app/data:ro
+
+      # Mount output directory (writable)
+      - ../output:/app/output
+
+      # Mount settings.yaml (contains your OncoKB token)
+      - ../settings.yaml:/app/settings.yaml:ro
+
+      # Mount panels directory
+      - ../panels:/app/panels:ro
+
+    # Resource limits (adjust based on your machine)
+    deploy:
+      resources:
+        limits:
+          memory: 64G
+        reservations:
+          memory: 16G
+
+    # Environment variables
+    environment:
+      - PYTHONUNBUFFERED=1
+
+    # Override entrypoint for specific modes:
+    # command: ["--from-intermediates"]
+    # command: ["--skip-sources", "cosmic,tcga"]
+    # command: ["--rescue", "--mutect2-vcf", "/app/data/sample.vcf.gz", "--tumor-sample", "TUMOR"]

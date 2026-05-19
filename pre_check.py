@@ -20,6 +20,7 @@ import os
 import sys
 import gzip
 import argparse
+import shutil
 import subprocess
 import yaml
 
@@ -230,8 +231,7 @@ def main():
 
     section('Required tools')
     for tool in ['bgzip', 'tabix', 'bcftools', 'python3']:
-        r = subprocess.run(['which', tool], capture_output=True)
-        if r.returncode == 0:
+        if shutil.which(tool) is not None:
             ok(f'{tool}')
         else:
             fail(f'{tool} not found on PATH')

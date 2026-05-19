@@ -1,16 +1,23 @@
+# Pipeline-generated data (rebuilt on every run)
 data/
-output/
 intermediate/
+output/
+logs/
 *.tsv.gz
 *.vcf.gz
 *.vcf.gz.tbi
 *.vcf.gz.csi
-*.pyc
-__pycache__/
 *.log
 
-# User-specific settings containing API tokens — never commit
-logs/
+# Python
+*.pyc
+__pycache__/
+
+# User secrets — NEVER commit. Copy settings.yaml.example to settings.yaml
+# and add your OncoKB token locally.
+settings.yaml
+
+# Local development artefacts (not part of the public release)
 tools/db_audit.py
 tools/diagnose_hotspots.py
 tools/fix_hotspots_strand.py
@@ -20,6 +27,8 @@ panels/CHIP.bed
 panels/Pan_lymphoid.bed
 panels/aSHM_and_aSHM_Morin.bed
 _backup_pre_sweep/
-.claude/
-CLAUDE.md
 temp/
+
+# Local notes and stray run output
+NOTES.md
+nohup.out

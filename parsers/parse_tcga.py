@@ -119,7 +119,7 @@ def _cancer_type_from_barcode(barcode: str) -> str:
     parts = str(barcode).split('-')
     if len(parts) >= 2:
         code = parts[1].upper()
-        return _TCGA_PROJECT_MAP.get(code, '')
+        return _TCGA_PROJECT_MAP.get(code, f'TCGA_{parts[1]}')
     return ''
 
 

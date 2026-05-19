@@ -165,13 +165,18 @@ def parse_clinvar(vcf_path: str,
                 if len(mc_parts) > 1:
                     consequence = map_consequence(mc_parts[1])
 
+            try:
+                pos_int = int(pos_str)
+            except ValueError:
+                continue
+
             for alt in alts:
                 alt = clean_allele(alt)
                 if not is_valid_allele(ref) or not is_valid_allele(alt):
                     continue
                 rows.append({
                     'chrom':       chrom,
-                    'pos':         int(pos_str),
+                    'pos':         pos_int,
                     'ref':         ref,
                     'alt':         alt,
                     'gene':        gene,
