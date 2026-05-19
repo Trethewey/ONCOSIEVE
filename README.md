@@ -69,7 +69,7 @@ oncosieve/
 ├── test_pipeline.py            # Test harness
 ├── run_oncosieve.sh            # Orchestrator; run this to start the pipeline
 ├── config.yaml                 # File paths and source enable/disable flags
-├── settings.yaml               # Thresholds and parameters (edit this)
+├── settings.yaml.example       # Template — copy to settings.yaml and add your OncoKB token (settings.yaml is gitignored)
 ├── requirements.txt
 ├── assets/                     # Logos used by the HTML report and README
 ├── packaging/                  # Docker, conda, pip distribution
@@ -417,6 +417,8 @@ python3 mutect2_rescue.py \
 
 Tier 3 contains variants that meet the base inclusion filter but fall below the Tier 2 count threshold. This includes TP53 database variants that pass on functional annotation rather than recurrence alone.
 
+PrimateAI-3D scores are annotated onto each variant but do not feed into tier assignment in v2; tiering remains driven by recurrence and curated evidence.
+
 VAF floors are configurable in `settings.yaml` under `vaf_rescue`.
 
 ---
@@ -471,6 +473,14 @@ oncosieve   # exposed as a CLI entry point
 ```
 
 All three paths assume the `data/` directory is populated as described in [Data preparation](#data-preparation). Reference data is not bundled with any package.
+
+---
+
+## Licence
+
+OncoSieve is released under the [MIT License](LICENSE). The pipeline code is permissively licensed and you may copy, modify, and redistribute it freely.
+
+The underlying **data sources** are governed by their own licences (e.g. COSMIC requires a commercial-use licence, OncoKB requires an academic API token, Illumina PrimateAI-3D requires a data licence). You are responsible for complying with each source's terms separately.
 
 ---
 

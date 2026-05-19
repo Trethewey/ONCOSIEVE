@@ -17,7 +17,7 @@ setup(
     author="Dr Christopher Trethewey",
     author_email="christopher.trethewey@nhs.net",
     url="https://github.com/Trethewey/ONCOSIEVE",
-    license="Research Use Only",
+    license="MIT",
     python_requires=">=3.10",
     packages=find_packages(where=".."),
     package_dir={"": ".."},
